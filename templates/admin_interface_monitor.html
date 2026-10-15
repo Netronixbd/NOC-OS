@@ -1,0 +1,216 @@
+{% extends "base.html" %}
+{% block content %}
+<style>
+.im-toolbar{display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:16px}
+.im-stat{border:1px solid var(--bd);border-radius:12px;padding:14px;background:var(--card,#fff);min-width:130px;flex:1}
+.im-stat strong{display:block;font-size:22px;margin-top:5px}
+.im-table-wrap{overflow:auto;border:1px solid var(--bd);border-radius:12px}
+.im-table{width:100%;border-collapse:collapse;min-width:1050px}
+.im-table th,.im-table td{padding:10px;border-bottom:1px solid var(--bd);text-align:left;font-size:13px}
+.im-table th{background:var(--pri-l);position:sticky;top:0}
+.im-table input[type=number]{width:92px;padding:7px;border:1px solid var(--bd);border-radius:7px}
+.im-pill{border-radius:20px;padding:4px 8px;font-size:11px;font-weight:700}
+.im-up{background:#dcfce7;color:#166534}.im-down{background:#fee2e2;color:#991b1b}
+.im-btn{border:0;border-radius:8px;padding:9px 13px;cursor:pointer;background:var(--pri);color:white;font-weight:650}
+.im-muted{background:#e2e8f0;color:#334155}.im-note{font-size:12px;color:var(--mu)}
+</style>
+<div class="im-toolbar">
+  <button class="im-btn" id="im-discover">Discover VLANs</button>
+  <button class="im-btn im-muted" id="im-sound">Enable sound</button>
+  <button class="im-btn im-muted" id="im-mute">Mute sound</button>
+  <span class="live"><i></i> Auto refresh every 5 seconds</span>
+  <span id="im-status" class="im-note">Starting monitor…</span>
+</div>
+<div class="im-toolbar">
+ <div class="im-stat">Discovered interfaces<strong id="im-total">0</strong></div>
+ <div class="im-stat">Monitoring enabled<strong id="im-enabled">0</strong></div>
+ <div class="im-stat">Interfaces down<strong id="im-down-count">0</strong></div>
+ <div class="im-stat">Router/API errors<strong id="im-errors">0</strong></div>
+</div>
+<div class="card">
+ <h3>Available VLANs — manually select</h3>
+ <p class="im-note">Discovery শুধু VLAN খুঁজবে। Add না করা পর্যন্ত কোনো interface monitoring তালিকায় যুক্ত হবে না। PPPoE user interface এখানে দেখানো হবে না।</p>
+ <div class="im-table-wrap">
+  <table class="im-table" style="min-width:650px">
+   <thead><tr><th>Router</th><th>VLAN interface</th><th>Link</th><th>Action</th></tr></thead>
+   <tbody id="im-vlan-candidates"><tr><td colspan="4">Click Discover VLANs.</td></tr></tbody>
+  </table>
+ </div>
+</div>
+<div class="card">
+ <h3>Selected VLANs — policies and live traffic</h3>
+ <p class="im-note">RX = traffic received by router; TX = traffic sent by router. Set limits in Mbps. A limit of 0 disables that direction's traffic threshold. Added VLANs start disabled. Enable monitoring and set optional RX/TX limits.</p>
+ <div class="im-table-wrap">
+ <table class="im-table">
+ <thead><tr><th>Monitor</th><th>Router / Interface</th><th>Type</th><th>Link</th><th>RX Mbps</th><th>TX Mbps</th><th>RX limit</th><th>TX limit</th><th>Warn %</th><th>Down alert</th><th>Save</th><th>Graph</th><th>Remove</th></tr></thead>
+ <tbody id="im-rows"><tr><td colspan="13">Loading…</td></tr></tbody>
+ </table>
+ </div>
+</div>
+<div class="card" id="im-graph-panel" style="display:none">
+ <h3 id="im-graph-title">Live VLAN traffic</h3>
+ <p class="im-note">Browser-local rolling history; refresh interval 5 seconds. RX/TX shown in Mbps.</p>
+ <canvas id="im-graph" height="240" style="width:100%;height:240px"></canvas>
+ <button class="im-btn im-muted" id="im-graph-close">Close graph</button>
+</div>
+<script>
+(function(){
+const $=id=>document.getElementById(id);
+let soundOn=false, audio=null, seen=new Set(), candidates=[], samples={}, graphId=null;
+function beep(){
+ if(!soundOn)return;
+ try{
+  audio=audio||new (window.AudioContext||window.webkitAudioContext)();
+  if(audio.state==='suspended')audio.resume();
+  const o=audio.createOscillator(),g=audio.createGain();
+  o.type='sawtooth';o.frequency.value=880;g.gain.value=.07;
+  o.connect(g);g.connect(audio.destination);o.start();
+  setTimeout(()=>{o.stop();o.disconnect();g.disconnect()},240);
+ }catch(e){}
+}
+$('im-sound').onclick=()=>{soundOn=true;beep();$('im-status').textContent='Sound enabled';};
+$('im-mute').onclick=()=>{soundOn=false;$('im-status').textContent='Sound muted';};
+function esc(s){return String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
+function row(x){
+ return `<tr data-id="${x.id}" data-router-id="${x.router_id}" data-name="${esc(x.name)}">
+ <td><input class="en" type="checkbox" ${x.enabled?'checked':''}></td>
+ <td><b>${esc(x.router)}</b><br>${esc(x.name)}</td><td>${esc(x.type||'-')}</td>
+ <td><span class="im-pill ${x.running?'im-up':'im-down'}">${x.running?'UP':'DOWN'}</span></td>
+ <td>${Number(x.rx_mbps).toFixed(3)}</td><td>${Number(x.tx_mbps).toFixed(3)}</td>
+ <td><input class="rx" type="number" min="0" step="0.1" value="${x.rx_limit_mbps}"></td>
+ <td><input class="tx" type="number" min="0" step="0.1" value="${x.tx_limit_mbps}"></td>
+ <td><input class="pct" type="number" min="1" max="100" value="${x.warning_pct}"></td>
+ <td><input class="down" type="checkbox" ${x.alert_down?'checked':''}></td>
+ <td><button class="im-btn save">Save</button></td><td><button class="im-btn graph">Live graph</button></td><td><button class="im-btn im-muted remove">Remove</button></td></tr>`;
+}
+
+function renderCandidates(){
+ const body=$('im-vlan-candidates');
+ if(!candidates.length){
+  body.innerHTML='<tr><td colspan="4">No VLAN candidates. Check router API and click Discover VLANs.</td></tr>';
+  return;
+ }
+ body.innerHTML=candidates.map(v=>`<tr>
+  <td>${esc(v.router)}</td><td><b>${esc(v.name)}</b></td>
+  <td><span class="im-pill ${v.running&&!v.disabled?'im-up':'im-down'}">${v.running&&!v.disabled?'UP':'DOWN'}</span></td>
+  <td>${v.added?'<span class="im-pill im-up">Added</span>':'<button class="im-btn add-vlan" data-router="${v.router_id}" data-name="${esc(v.name)}">Add</button>'}</td>
+ </tr>`).join('');
+}
+function drawGraph(){
+ const canvas=$('im-graph'), panel=$('im-graph-panel');
+ if(!canvas || panel.style.display==='none' || graphId===null)return;
+ const data=samples[graphId]||[];
+ const w=Math.max(320,canvas.clientWidth||600),h=240,dpr=window.devicePixelRatio||1;
+ canvas.width=w*dpr;canvas.height=h*dpr;
+ const c=canvas.getContext('2d');c.scale(dpr,dpr);c.clearRect(0,0,w,h);
+ const pad={l:48,r:12,t:20,b:28},pw=w-pad.l-pad.r,ph=h-pad.t-pad.b;
+ const max=Math.max(1,...data.flatMap(v=>[v.rx,v.tx]))*1.15;
+ c.font='11px sans-serif';c.strokeStyle='#cbd5e1';c.fillStyle='currentColor';c.lineWidth=1;
+ for(let i=0;i<=4;i++){
+  const y=pad.t+ph*i/4;c.beginPath();c.moveTo(pad.l,y);c.lineTo(w-pad.r,y);c.stroke();
+  c.fillText((max*(1-i/4)).toFixed(1),3,y+4);
+ }
+ function line(key,colour){
+  if(!data.length)return;c.beginPath();c.strokeStyle=colour;c.lineWidth=2;
+  data.forEach((v,i)=>{const x=pad.l+(data.length<2?pw:pw*i/(data.length-1));const y=pad.t+ph*(1-v[key]/max);if(i)c.lineTo(x,y);else c.moveTo(x,y)});
+  c.stroke();
+ }
+ line('rx','#0284c7');line('tx','#ea580c');
+ c.fillStyle='#0284c7';c.fillText('RX Mbps',pad.l,12);
+ c.fillStyle='#ea580c';c.fillText('TX Mbps',pad.l+78,12);
+ c.fillStyle='currentColor';c.fillText('Oldest',pad.l,h-7);c.fillText('Latest',w-52,h-7);
+}
+function recordSamples(xs){
+ for(const x of xs){
+  if(!samples[x.id])samples[x.id]=[];
+  samples[x.id].push({rx:Number(x.rx_mbps)||0,tx:Number(x.tx_mbps)||0});
+  if(samples[x.id].length>60)samples[x.id].shift();
+ }
+ if(graphId!==null)drawGraph();
+}
+
+async function refresh(){
+ try{
+  const r=await fetch('/admin/interface-monitor/api',{cache:'no-store'});
+  if(!r.ok)throw Error('HTTP '+r.status);
+  const d=await r.json(),xs=d.interfaces||[];recordSamples(xs);
+  $('im-total').textContent=xs.length;
+  $('im-enabled').textContent=xs.filter(x=>x.enabled).length;
+  $('im-down-count').textContent=xs.filter(x=>x.enabled&&!x.running).length;
+  $('im-errors').textContent=(d.errors||[]).length;
+  const active=xs.filter(x=>x.enabled&&!x.running).map(x=>'down:'+x.id);
+  for(const x of xs){
+   if(x.enabled && x.rx_limit_mbps>0 && x.rx_mbps>=x.rx_limit_mbps)active.push('rx:'+x.id);
+   if(x.enabled && x.tx_limit_mbps>0 && x.tx_mbps>=x.tx_limit_mbps)active.push('tx:'+x.id);
+  }
+  const fresh=active.filter(x=>!seen.has(x));
+  if(fresh.length)beep();
+  seen=new Set(active);
+  const old=new Map(Array.from($('im-rows').querySelectorAll('tr[data-id]')).map(tr=>[tr.dataset.id,tr]));
+  $('im-rows').innerHTML=xs.length?xs.map(x=>{
+    const tr=old.get(String(x.id));
+    // Preserve values while a user is editing a row.
+    if(tr && tr.contains(document.activeElement))return tr.outerHTML;
+    return row(x);
+  }).join(''):'<tr><td colspan="13">No interfaces discovered. Check router API and click Discover.</td></tr>';
+  $('im-status').textContent='Last data refresh: '+new Date().toLocaleTimeString()+
+   ((d.errors||[]).length?' · Some router API requests failed':'');
+ }catch(e){$('im-status').textContent='Refresh failed: '+e.message;}
+}
+$('im-rows').addEventListener('click',async e=>{
+ const btn=e.target.closest('.save');if(!btn)return;
+ const tr=btn.closest('tr'),id=Number(tr.dataset.id);
+ btn.disabled=true;
+ try{
+  const r=await fetch('/admin/interface-monitor/policy',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({
+   id,enabled:tr.querySelector('.en').checked,alert_down:tr.querySelector('.down').checked,
+   rx_limit_mbps:tr.querySelector('.rx').value,tx_limit_mbps:tr.querySelector('.tx').value,
+   warning_pct:tr.querySelector('.pct').value
+  })});
+  const d=await r.json();if(!r.ok)throw Error(d.detail||'Save failed');
+  $('im-status').textContent='Saved policy for '+id;await refresh();
+ }catch(e){alert('Save failed: '+e.message);}finally{btn.disabled=false;}
+});
+
+$('im-vlan-candidates').addEventListener('click',async e=>{
+ const b=e.target.closest('.add-vlan');if(!b)return;
+ b.disabled=true;
+ try{
+  const r=await fetch('/admin/interface-monitor/add',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({router_id:Number(b.dataset.router),name:b.dataset.name})});
+  const d=await r.json();if(!r.ok)throw Error(d.detail||'Add failed');
+  candidates=candidates.map(v=>v.router_id===Number(b.dataset.router)&&v.name===b.dataset.name?{...v,added:true}:v);
+  renderCandidates();$('im-status').textContent='VLAN added: '+b.dataset.name;await refresh();
+ }catch(e){alert('Add failed: '+e.message);}finally{b.disabled=false;}
+});
+$('im-rows').addEventListener('click',async e=>{
+ const graph=e.target.closest('.graph');
+ if(graph){
+  const tr=graph.closest('tr');graphId=Number(tr.dataset.id);
+  $('im-graph-title').textContent='Live traffic: '+tr.cells[1].innerText.replace('\\n',' / ');
+  $('im-graph-panel').style.display='block';drawGraph();return;
+ }
+ const remove=e.target.closest('.remove');if(!remove)return;
+ const tr=remove.closest('tr');
+ if(!confirm('Remove this VLAN from monitoring?'))return;
+ remove.disabled=true;
+ try{
+  const r=await fetch('/admin/interface-monitor/remove',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({router_id:Number(tr.dataset.routerId||0),name:tr.dataset.name||''})});
+  const d=await r.json();if(!r.ok)throw Error(d.detail||'Remove failed');
+  await refresh();
+ }catch(e){alert('Remove failed: '+e.message);}finally{remove.disabled=false;}
+});
+$('im-graph-close').onclick=()=>{$('im-graph-panel').style.display='none';graphId=null;};
+
+$('im-discover').onclick=async()=>{
+ $('im-status').textContent='Discovering interfaces…';
+ try{
+  const r=await fetch('/admin/interface-monitor/discover',{method:'POST'});
+  const d=await r.json();candidates=d.vlans||[];renderCandidates();
+  $('im-status').textContent=`Found ${candidates.length} VLANs; ${d.errors?.length||0} router errors`;
+  await refresh();
+ }catch(e){$('im-status').textContent='Discovery failed: '+e.message;}
+};
+refresh();setInterval(refresh,5000);
+})();
+</script>
+{% endblock %}

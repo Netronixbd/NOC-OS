@@ -1,0 +1,81 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="row" style="justify-content:space-between;gap:10px;flex-wrap:wrap;margin-bottom:14px">
+  <h2 style="margin:0">{{ title }}</h2>
+  <div class="row">
+    <a class="btn sec sm" href="{{ back }}">← Dashboard</a>
+    {% if kind == "router" %}
+      <a class="btn sm" href="/admin/devices/router/{{ device.id }}">Edit device</a>
+    {% else %}
+      <a class="btn sm" href="/admin/devices/olt/{{ device.id }}">Edit device</a>
+      <a class="btn sec sm" href="/admin/devices/olt/{{ device.id }}/tools">OLT Tools</a>
+    {% endif %}
+  </div>
+</div>
+
+<div class="grid g2">
+  <div class="card">
+    <h3>Configured device information</h3>
+    <table><tbody>
+      <tr><th>Name</th><td>{{ device.name }}</td></tr>
+      <tr><th>Host / IP</th><td>{{ device.host }}</td></tr>
+      {% if kind == "router" %}
+        <tr><th>Device type</th><td>MikroTik Router</td></tr>
+        <tr><th>API enabled</th><td>{{ "Yes" if device.api_enabled else "No" }}</td></tr>
+        <tr><th>API port</th><td>{{ device.port }}{% if device.use_ssl %} (SSL){% endif %}</td></tr>
+        <tr><th>SNMP enabled</th><td>{{ "Yes" if device.snmp_enabled else "No" }}</td></tr>
+        <tr><th>SNMP port</th><td>{{ device.snmp_port or 161 }}</td></tr>
+      {% else %}
+        <tr><th>Vendor</th><td>{{ device.vendor }}</td></tr>
+        <tr><th>SNMP port</th><td>{{ device.snmp_port }}</td></tr>
+        <tr><th>SNMP version</th><td>{{ device.snmp_version }}</td></tr>
+        <tr><th>Enabled</th><td>{{ "Yes" if device.enabled else "No" }}</td></tr>
+        <tr><th>OID profile</th><td>{{ profile.name if profile else "Not assigned" }}</td></tr>
+        <tr><th>Configured VLANs</th><td>{{ device.vlans or "—" }}</td></tr>
+      {% endif %}
+    </tbody></table>
+    <p class="mu" style="font-size:12px">Credentials and SNMP community are hidden on this page.</p>
+  </div>
+
+  <div class="card">
+    <h3>Live monitoring status</h3>
+    <table><tbody>
+      <tr><th>Connectivity</th><td>
+        {% if live.get("ok") %}<span class="badge b-online">Reachable</span>
+        {% else %}<span class="badge b-unknown">Unavailable / not polled</span>{% endif %}
+      </td></tr>
+      {% if live.get("error") %}<tr><th>Last error</th><td>{{ live.get("error") }}</td></tr>{% endif %}
+      {% if kind == "router" %}
+        <tr><th>Identity</th><td>{{ live.get("identity") or "—" }}</td></tr>
+        <tr><th>Board / model</th><td>{{ live.get("board") or "—" }}</td></tr>
+        <tr><th>RouterOS version</th><td>{{ live.get("version") or "—" }}</td></tr>
+        <tr><th>Uptime</th><td>{{ live.get("uptime") or "—" }}</td></tr>
+        <tr><th>CPU load</th><td>{{ (live.get("cpu") | string) + "%" if live.get("cpu") is not none else "—" }}</td></tr>
+        <tr><th>Memory used</th><td>{{ (live.get("mem_pct") | string) + "%" if live.get("mem_pct") is not none else "—" }}</td></tr>
+        <tr><th>Active PPPoE sessions</th><td>{{ live.get("active") if live.get("active") is not none else "—" }}</td></tr>
+        <tr><th>Monitoring method</th><td>{{ live.get("via") or "—" }}</td></tr>
+      {% else %}
+        <tr><th>System name</th><td>{{ live.get("name") or "—" }}</td></tr>
+        <tr><th>System description</th><td>{{ live.get("descr") or "—" }}</td></tr>
+        <tr><th>Uptime</th><td>{{ live.get("uptime") or "—" }}</td></tr>
+        <tr><th>ONU online</th><td>{{ live.get("onu_online", "—") }}</td></tr>
+        <tr><th>ONU total</th><td>{{ live.get("onu_total", "—") }}</td></tr>
+        <tr><th>Vendor OID support</th><td>{{ "Yes" if live.get("onu_supported") else "Not available / not configured" }}</td></tr>
+      {% endif %}
+    </tbody></table>
+    {% if kind == "olt" and live.get("pons") %}
+      <h3 style="margin-top:18px">PON status</h3>
+      <div class="row" style="flex-wrap:wrap;gap:8px">
+      {% for p in live.get("pons", []) %}
+        <div class="card" style="padding:10px;min-width:105px">
+          <b>{{ p.get("name", p.get("pon", p.get("id", "PON"))) }}</b>
+          <div class="mu" style="font-size:12px">{{ p.get("onu_online", p.get("online", "—")) }} online</div>
+          {% if p.get("onu_total") is not none %}<div class="mu" style="font-size:12px">{{ p.get("onu_total") }} total</div>{% endif %}
+        </div>
+      {% endfor %}
+      </div>
+    {% endif %}
+  </div>
+</div>
+<p class="mu" style="font-size:12px;margin-top:12px">Live values reflect the latest monitoring poll. If a value is unavailable, check device connectivity and its API/SNMP profile.</p>
+{% endblock %}

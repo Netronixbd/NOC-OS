@@ -1,0 +1,19 @@
+{% extends "base.html" %}{% block content %}
+<form method="post" action="/admin/devices/profile/{{ p.id }}">
+<div class="card"><div class="row" style="justify-content:space-between"><h2 style="margin:0">🧩 Profile · {{ p.name }}</h2><a class="btn sm sec" href="/admin/devices">← Devices</a></div>
+<div class="grid g2" style="margin-top:12px"><div><label>Name</label><input name="name" value="{{ p.name }}"></div>
+<div><label>Vendor</label><input name="vendor" value="{{ p.vendor }}"></div>
+<div><label>Enterprise OID (Discover start)</label><input name="enterprise_oid" value="{{ p.enterprise_oid }}"></div>
+<div><label>Index template</label><input name="index_template" value="{{ p.index_template }}"><span class="mu" style="font-size:12px">Variables: {ifindex} {slot} {pon} {onu}. BDCOM-style tables use {ifindex}.</span></div></div>
+<label>Status map (raw value = text)</label><input name="status_map" value="{{ p.status_map }}" placeholder="1=Online,2=Offline">
+<label>Notes</label><textarea name="notes" rows="2">{{ p.notes }}</textarea></div>
+<div class="card"><h2>Column OIDs</h2><p class="mu">Column OID (without the ONU index). The portal appends the index from the template.</p>
+<div class="scroll"><table><tbody><tr><th>Field</th><th>Column OID</th><th>Divisor</th><th>Unit (power)</th><th>Index</th><th>Confidence</th></tr>
+{% for k,l in fields %}{% set c = oids.get(k, {}) %}<tr><td>{{ l }}</td><td><input name="oid_{{ k }}" value="{{ c.get('oid','') }}"></td>
+<td><input name="div_{{ k }}" value="{{ c.get('div',1) }}" style="width:80px"></td>
+<td><select name="unit_{{ k }}" style="width:120px"><option value="dbm" {{ 'selected' if c.get('unit','dbm')=='dbm' }}>dBm</option><option value="uw" {{ 'selected' if c.get('unit')=='uw' }}>µW</option><option value="dbm_str" {{ 'selected' if c.get('unit')=='dbm_str' }}>dBm from text</option></select></td>
+<td><select name="index_{{ k }}" style="width:130px"><option value="ifindex" {{ 'selected' if c.get('index','ifindex')=='ifindex' }}>profile template</option><option value="pon_mac" {{ 'selected' if c.get('index')=='pon_mac' }}>PON ifIndex.ONU MAC</option><option value="auto" {{ 'selected' if c.get('index')=='auto' }}>auto (try both)</option></select></td>
+<td><select name="conf_{{ k }}" style="width:130px"><option value="" {{ 'selected' if not c.get('conf') }}>verified by me</option><option value="high" {{ 'selected' if c.get('conf')=='high' }}>documented (high)</option><option value="low" {{ 'selected' if c.get('conf')=='low' }}>unverified (low)</option></select></td></tr>{% endfor %}</tbody></table></div>
+<p class="mu" style="font-size:13px">Values from <b>unverified</b> OIDs are shown with a ⚠ in diagnosis until you check them against the OLT CLI and set “verified by me”. Index “PON ifIndex.ONU MAC” is for tables keyed by PON port + ONU MAC (e.g. BDCOM distance).</p>
+<button>Save profile</button></div></form>
+{% endblock %}

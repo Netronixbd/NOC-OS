@@ -1,0 +1,15 @@
+{% extends "base.html" %}{% block content %}
+<div class="card" style="text-align:center;padding:30px 20px"><h1 style="font-size:24px">🔎 Troubleshoot a customer</h1>
+<p class="mu">Search by PPPoE user ID, name, phone, or the customer router MAC.</p>
+<form method="get" class="row" style="justify-content:center;max-width:640px;margin:auto">
+<div class="sg"><input name="q" value="{{ q }}" placeholder="User ID / name / phone / MAC (AA:BB:CC:DD:EE:FF)" autofocus required data-suggest="/admin/api/suggest" data-min="2"></div>
+<button>Diagnose</button></form></div>
+{% if results is not none %}<div class="card">
+{% if results %}<table><tbody><tr><th></th><th>User ID</th><th>Name</th><th>Phone</th><th>Source</th><th></th></tr>
+{% for c in results %}<tr><td>{% if c.online is true %}<i class="dot on"></i>{% elif c.online is false %}<i class="dot off"></i>{% else %}<i class="dot"></i>{% endif %}</td><td>{{ c.uid or c.mac }}</td><td>{{ c.name }}</td><td>{{ c.phone }}</td><td><span class="chip">{{ c.source }}</span></td>
+<td><a class="btn sm" href="/admin/d?uid={{ c.uid }}&mac={{ c.mac or '' }}">Diagnose</a></td></tr>{% endfor %}</tbody></table>
+{% else %}<p>No match in customers or on the routers. <a class="btn sm" href="/admin/d?uid={{ q }}">Try “{{ q }}” as a PPPoE user ID anyway</a></p>{% endif %}</div>{% endif %}
+{% if recent %}<div class="card"><h2>Open tickets</h2><table><tbody>
+{% for x in recent %}<tr><td>#{{ x.id }}</td><td>{{ x.customer.name or x.customer.user_id }}<br><span class="mu">{{ x.customer.user_id }}</span></td><td>{{ x.category }}</td>
+<td><span class="badge b-{{ x.status }}">{{ STATUS_LABEL[x.status] }}</span></td><td><a class="btn sm" href="/admin/d?uid={{ x.customer.user_id }}">Diagnose</a></td></tr>{% endfor %}</tbody></table></div>{% endif %}
+{% endblock %}

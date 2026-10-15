@@ -1,0 +1,24 @@
+{% extends "base.html" %}{% block content %}
+<div class="card"><h2>{{ c.name or c.user_id }}</h2>
+<div class="kv">
+<div><span>User ID</span><b>{{ c.user_id }}</b></div>
+<div><span>Phone</span><b>{{ phone }}</b></div>
+<div><span>Connection</span><span class="badge b-{{ st.state }}" style="color:inherit">
+{{ {'online':'Online','offline':'Offline','disabled':'Disabled','notfound':'Unknown','unknown':'Unknown'}[st.state] }}</span></div>
+</div></div>
+<div class="card"><h2>📝 Report a problem / অভিযোগ জানান</h2>
+<form method="post" action="/c/{{ c.token }}/complaint">
+<label>Problem type</label><select name="category">{% for x in cats %}<option>{{ x }}</option>{% endfor %}</select>
+<label>Details</label><textarea name="message" rows="4" maxlength="1000" placeholder="Describe your problem"></textarea>
+<label>Contact number (optional)</label><input name="contact_phone" placeholder="01XXXXXXXXX">
+<button>Submit complaint</button></form></div>
+{% for x in complaints %}<div class="card"><div class="row" style="justify-content:space-between">
+<h2 style="margin:0">#{{ x.id }} · {{ x.category }}</h2><span class="badge b-{{ x.status }}">{{ STATUS_LABEL[x.status] }}</span></div>
+<p class="mu" style="margin:4px 0">{{ x.created_at|dt }}{% if x.message %} — {{ x.message }}{% endif %}</p>
+{% if x.replies %}<div class="thread">{% for r in x.replies %}<div>
+{% if r.kind=='wait' %}⏳ <b>Waiting for update</b>{% elif r.kind=='close' %}✅ <b>Closed</b>{% else %}💬 <b>{{ 'You' if r.role=='customer' else 'Support team' }}</b>{% endif %}
+<span class="mu">· {{ r.created_at|dt }}</span>{% if r.message %}<br>{{ r.message }}{% endif %}</div>{% endfor %}</div>{% endif %}
+{% if x.status!='closed' %}<form method="post" action="/c/{{ c.token }}/followup/{{ x.id }}" class="row">
+<input name="message" placeholder="Add a message to this complaint" style="flex:1;min-width:200px" maxlength="500" required><button class="sm sec">Send</button></form>{% endif %}
+</div>{% endfor %}
+{% endblock %}

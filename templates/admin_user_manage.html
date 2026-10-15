@@ -1,0 +1,20 @@
+{% extends "base.html" %}{% block content %}
+<div class="card"><div class="row" style="justify-content:space-between"><h2 style="margin:0">{{ uid }} <span class="mu" style="font-size:14px;font-weight:500">{% if cust %}{{ cust.name }} · {{ cust.phone }}{% endif %}</span></h2>
+<div class="row"><a class="btn sm" href="/admin/d?uid={{ uid }}">🔎 Diagnose</a><a class="btn sm sec" href="/admin/customers">← Users</a></div></div></div>
+{% if sec %}
+<div class="card"><h2>PPP secret on {{ rname }}</h2><div class="kv">
+<div><span>Status</span><b>{{ 'Disabled' if sec.get('disabled') else 'Enabled' }}</b></div><div><span>Profile</span><b>{{ sec.get('profile') }}</b></div>
+<div><span>Service</span><b>{{ sec.get('service') }}</b></div><div><span>Comment</span><b>{{ sec.get('comment') or '-' }}</b></div>
+<div><span>Last logged out</span><b>{{ sec.get('last-logged-out') or '-' }}</b></div></div></div>
+<div class="grid g2">
+<div class="card"><h2>Change password</h2><form method="post" action="/admin/users/manage"><input type="hidden" name="uid" value="{{ uid }}"><input type="hidden" name="rid" value="{{ rid }}"><input type="hidden" name="action" value="password">
+<input name="password" placeholder="New password" required><button>Save</button></form></div>
+<div class="card"><h2>Change profile</h2><form method="post" action="/admin/users/manage"><input type="hidden" name="uid" value="{{ uid }}"><input type="hidden" name="rid" value="{{ rid }}"><input type="hidden" name="action" value="profile">
+<select name="profile" id="pf"><option>{{ sec.get('profile') }}</option></select><button>Apply</button></form></div></div>
+<div class="card"><h2>Account actions</h2><div class="row">
+<form method="post" action="/admin/users/manage"><input type="hidden" name="uid" value="{{ uid }}"><input type="hidden" name="rid" value="{{ rid }}">
+{% if sec.get('disabled') %}<button class="ok" name="action" value="enable">Enable account</button>{% else %}<button class="wa" name="action" value="disable" onclick="return confirm('Disable this account and disconnect the session?')">Disable &amp; disconnect</button>{% endif %}</form>
+<form method="post" action="/admin/users/manage" onsubmit="return confirm('Permanently remove this PPP secret from the router?')"><input type="hidden" name="uid" value="{{ uid }}"><input type="hidden" name="rid" value="{{ rid }}"><button class="dan" name="action" value="remove">Remove secret</button></form></div></div>
+{% raw %}<script>fetch('/admin/api/profiles?router='+document.querySelector('[name=rid]').value).then(function(r){return r.json()}).then(function(l){if(!Array.isArray(l))return;var s=document.getElementById('pf'),cur=s.value;s.innerHTML=l.map(function(p){return '<option'+(p===cur?' selected':'')+'>'+p+'</option>'}).join('')})</script>{% endraw %}
+{% else %}<div class="card"><div class="hint h-warn">No PPP secret named <b>{{ uid }}</b> found on the connected routers{% if err %} ({{ err }}){% endif %}. The user may be authenticated via RADIUS, which cannot be managed from here.</div></div>{% endif %}
+{% endblock %}

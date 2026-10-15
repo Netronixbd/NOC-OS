@@ -1,0 +1,28 @@
+{% extends "base.html" %}{% block content %}
+<div class="grid" style="margin-bottom:18px">
+<div class="card stat"><b data-count="{{ stats.active }}">0</b><span>Active tickets</span></div>
+<div class="card stat"><b data-count="{{ stats.today }}">0</b><span>Last 24h</span></div>
+<div class="card stat"><b data-count="{{ stats.closed }}">0</b><span>Closed</span></div>
+<div class="card stat"><b data-count="{{ stats.customers }}">0</b><span>Customers</span></div></div>
+<div class="row" style="margin-bottom:14px"><h2 style="margin:0;margin-right:auto">🎫 Tickets</h2>
+{% for s,l in [('active','Active'),('open','Open'),('waiting','Waiting'),('replied','Replied'),('closed','Closed'),('all','All')] %}<a class="btn sm {{ '' if s==status else 'sec' }}" href="/admin/tickets?status={{ s }}">{{ l }}</a>{% endfor %}</div>
+{% for x in items %}<div class="card">
+<div class="row" style="justify-content:space-between"><div><b>#{{ x.id }} · {{ x.customer.name or x.customer.user_id }}</b>
+<span class="mu"> · {{ x.customer.user_id }} · {{ x.contact_phone or x.customer.phone }}</span></div>
+<span class="badge b-{{ x.status }}">{{ STATUS_LABEL[x.status] }}</span></div>
+<p style="margin:8px 0"><b>{{ x.category }}</b> <span class="mu">{{ x.created_at|dt }}</span>{% if x.pon %} <span class="chip">🛰 {{ x.olt_name }} · PON {{ x.pon }}</span>{% endif %}<br>{{ x.message }}</p>
+{% if x.notify_error %}<div class="msg err">Telegram: {{ x.notify_error }}</div>{% endif %}
+{% if snaps[x.id] %}<details><summary>🔎 Diagnosis at complaint time</summary><div style="margin-top:6px">{% for l in snaps[x.id] %}<div>{{ l }}</div>{% endfor %}</div></details>{% endif %}
+{% if x.replies %}<div class="thread">{% for r in x.replies %}<div>
+{% if r.kind=='wait' %}⏳ <b>Waiting for update</b>{% elif r.kind=='close' %}✅ <b>Closed</b>{% else %}💬 <b>{{ r.author }}</b> <span class="chip">{{ r.role }}</span>{% endif %}
+<span class="mu">· {{ r.created_at|dt }}</span>{% if r.message %}<br>{{ r.message }}{% endif %}</div>{% endfor %}</div>{% endif %}
+{% if x.status!='closed' %}
+<form method="post" action="/admin/complaints/{{ x.id }}/act" class="row" style="margin-top:10px">
+<input name="message" placeholder="Message to customer (required for Reply)" style="flex:1;min-width:220px">
+<button class="wa sm" name="action" value="wait">⏳ Waiting for update</button>
+<button class="sm" name="action" value="reply">💬 Reply</button>
+<button class="ok sm" name="action" value="close">✅ Close</button>
+<a class="btn sm sec" href="/admin/d?uid={{ x.customer.user_id }}">🔎 Diagnose</a></form>
+{% else %}<div style="margin-top:8px"><a class="btn sm sec" href="/admin/d?uid={{ x.customer.user_id }}">🔎 Diagnose</a></div>{% endif %}
+</div>{% else %}<div class="card mu">No tickets here 🎉</div>{% endfor %}
+{% endblock %}

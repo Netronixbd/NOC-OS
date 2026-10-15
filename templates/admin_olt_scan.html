@@ -1,0 +1,13 @@
+{% extends "base.html" %}{% block content %}
+<div class="card"><div class="row" style="justify-content:space-between"><h2 style="margin:0">📊 ONU scan · {{ o.name }} <span class="mu" style="font-size:14px">{{ res.total }} ONUs</span></h2>
+<a class="btn sm sec" href="/admin/devices/olt/{{ o.id }}/tools">← Tools</a></div></div>
+<div class="grid">{% for p in res.pons %}<div class="card stat"><span>PON {{ p.pon }}</span><b data-count="{{ p.total }}">0</b>
+<span>{% if p.bad %}<span class="badge b-bad">{{ p.bad }} critical</span> {% endif %}{% if p.weak %}<span class="badge b-weak">{{ p.weak }} weak</span> {% endif %}{% if p.offline %}<span class="badge b-offline">{{ p.offline }} offline</span> {% endif %}{% if not (p.bad or p.weak or p.offline) %}<span class="badge b-good">healthy</span>{% endif %}</span></div>{% endfor %}</div>
+<div class="card"><div class="row" style="margin-bottom:8px"><h2 style="margin:0;margin-right:auto">ONUs (weakest first)</h2>
+<label><input type="checkbox" id="onlyw">only weak / critical / no data</label></div>
+<div class="scroll"><table><tbody><tr><th>ONU</th><th>PON</th><th>Rx (dBm)</th><th>Quality</th><th>Status</th></tr>
+{% for r in res.rows %}<tr data-q="{{ r.quality or 'none' }}"><td>{{ r.name }}</td><td>{{ r.pon }}</td><td>{{ r.rx if r.rx is not none else '-' }}</td>
+<td>{% if r.quality %}<span class="badge b-{{ r.quality }}">{{ {'good':'Good','weak':'Weak','high':'Too strong','bad':'Critical'}[r.quality] }}</span>{% else %}<span class="mu">no data</span>{% endif %}</td>
+<td>{{ r.status or '' }}</td></tr>{% endfor %}</tbody></table></div></div>
+<script>document.getElementById('onlyw').onchange=function(e){document.querySelectorAll('tr[data-q]').forEach(function(r){r.style.display=(e.target.checked&&r.dataset.q==='good')?'none':''})}</script>
+{% endblock %}

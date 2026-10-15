@@ -1,0 +1,6 @@
+{% extends "base.html" %}{% block content %}
+<div class="card"><h2>Activity log</h2><p class="mu">Administrative actions: disconnects, user changes, Telegram reports.</p>
+<div class="scroll"><table><tbody><tr><th>When</th><th>Who</th><th>Action</th><th>Target</th><th>Detail</th></tr>
+{% for a in items %}<tr><td>{{ a.ts|dt }}</td><td>{{ a.who }}</td><td><span class="chip">{{ a.action }}</span></td><td>{{ a.target }}</td><td>{{ a.detail }}</td></tr>
+{% else %}<tr><td colspan="5" class="mu">No activity yet.</td></tr>{% endfor %}</tbody></table></div></div>
+{% endblock %}

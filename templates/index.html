@@ -1,0 +1,14 @@
+{% extends "base.html" %}{% block content %}
+<div class="card" style="text-align:center;padding:36px 20px">
+<h1 style="font-size:28px">👋 How can we help you?</h1>
+<p class="mu">Type your PPPoE User ID (suggestions will appear), mobile number or name to check your connection or report a problem.</p>
+<form method="post" action="/search" class="row" style="justify-content:center;max-width:620px;margin:auto">
+<div class="sg"><input name="q" value="{{ q }}" placeholder="User ID / mobile number / name" required minlength="3" autofocus data-suggest="/api/suggest"></div>
+<button>🔍 Search</button></form></div>
+{% if results is not none %}<div class="card">
+{% if results %}<h3>Select your account</h3>
+<table><tbody><tr><th>Name</th><th>User ID</th><th>Phone</th><th></th></tr>
+{% for r in results %}<tr><td>{{ r.name }}</td><td>{{ r.uid }}</td><td>{{ r.phone }}</td>
+<td><a class="btn sm" href="/c/{{ r.token }}">Select</a></td></tr>{% endfor %}</tbody></table>
+{% else %}<p>No account found. Please check and try again, or contact our support.</p>{% endif %}</div>{% endif %}
+{% endblock %}

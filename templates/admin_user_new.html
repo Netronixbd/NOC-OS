@@ -1,0 +1,18 @@
+{% extends "base.html" %}{% block content %}
+<div class="card" style="max-width:640px"><h2>Create PPPoE user</h2>
+<p class="mu">Creates a PPP secret on the selected MikroTik (the API user needs <b>write</b> + <b>ppp</b> policy) and adds the customer record.</p>
+<form method="post" action="/admin/users/new">
+<div class="grid g2"><div><label>Router</label><select name="router" id="rt" required>{% for r in routers %}<option value="{{ r.id }}">{{ r.name }}</option>{% endfor %}</select></div>
+<div><label>Profile</label><select name="profile" id="pf"><option>loading…</option></select></div>
+<div><label>PPPoE user ID</label><input name="user_id" required></div>
+<div><label>Password</label><div class="row"><input name="password" id="pw" value="{{ pw }}" required style="flex:1"><button type="button" class="sm sec" id="gen">Generate</button></div></div>
+<div><label>Customer name</label><input name="name"></div><div><label>Phone</label><input name="phone"></div></div>
+<label>Address (optional)</label><input name="address">
+<div class="row"><button>Create user</button><a class="btn sec" href="/admin/customers">Cancel</a></div></form></div>
+{% raw %}<script>
+var rt=document.getElementById('rt'),pf=document.getElementById('pf');
+function lp(){pf.innerHTML='<option>loading…</option>';fetch('/admin/api/profiles?router='+rt.value).then(function(r){return r.json()}).then(function(l){if(l.error){pf.innerHTML='<option value="">'+l.error+'</option>';return}pf.innerHTML=l.map(function(p){return '<option>'+p+'</option>'}).join('')}).catch(function(){pf.innerHTML='<option value="">could not load</option>'})}
+rt.onchange=lp;lp();
+document.getElementById('gen').onclick=function(){var c='abcdefghjkmnpqrstuvwxyzABCDEFGHJKMNPQRSTUVWXYZ23456789',s='';for(var i=0;i<10;i++)s+=c[Math.floor(Math.random()*c.length)];document.getElementById('pw').value=s};
+</script>{% endraw %}
+{% endblock %}

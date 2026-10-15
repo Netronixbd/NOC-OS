@@ -1,0 +1,32 @@
+{% extends "base.html" %}{% block content %}
+<div class="card"><div class="row" style="margin-bottom:10px"><h2 style="margin:0;margin-right:auto">🔌 MikroTik routers</h2><a class="btn sm" href="/admin/devices/router/new">+ Add router</a></div>
+<div class="scroll"><table><tbody><tr><th>Name</th><th>Host</th><th>API</th><th>SNMP</th><th></th></tr>
+{% for r in routers %}<tr><td><b>{{ r.name }}</b></td><td>{{ r.host }}</td>
+<td>{% if r.api_enabled is not false %}<span class="badge b-online">:{{ r.port }}{{ ' SSL' if r.use_ssl }}</span>{% else %}<span class="badge b-unknown">off</span>{% endif %}</td>
+<td>{% if r.snmp_enabled %}<span class="badge b-online">:{{ r.snmp_port or 161 }}</span>{% else %}<span class="badge b-unknown">off</span>{% endif %}</td>
+<td class="row">
+<form class="inline" method="post" action="/admin/devices/router/{{ r.id }}/test"><button class="sec sm">Test API</button></form>
+<form class="inline" method="post" action="/admin/devices/router/{{ r.id }}/snmp-test"><button class="sec sm">Test SNMP</button></form>
+<form class="inline row" method="post" action="/admin/devices/router/{{ r.id }}/sync"><button class="sm">Sync PPPoE users</button>
+<label class="mu" style="font-size:12px"><input type="checkbox" name="overwrite" value="1">overwrite</label></form>
+<a class="btn sm" href="/admin/device-details/router/{{ r.id }}">Details</a> <a class="btn sm sec" href="/admin/devices/router/{{ r.id }}">Edit</a>
+<form class="inline" method="post" action="/admin/devices/router/{{ r.id }}/delete" onsubmit="return confirm('Remove router?')"><button class="dan sm">Remove</button></form></td></tr>
+{% else %}<tr><td colspan="5" class="mu">No router yet.</td></tr>{% endfor %}</tbody></table></div>
+<p class="mu" style="font-size:13px">Enable API on MikroTik (<code>/ip service</code>) with a <b>read</b> user. SNMP gives live interface rate &amp; errors for the PPPoE session (<code>/snmp set enabled=yes</code>). Sync reads <code>/ppp secret</code>: if the comment has “Name 01XXXXXXXXX”, name and phone are filled automatically.</p></div>
+
+<div class="card"><div class="row" style="margin-bottom:10px"><h2 style="margin:0;margin-right:auto">🛰 OLTs (SNMP)</h2><a class="btn sm" href="/admin/devices/olt/new">+ Add OLT</a></div>
+<div class="scroll"><table><tbody><tr><th>Name</th><th>Vendor</th><th>Host</th><th>Profile</th><th></th></tr>
+{% for o in olts %}<tr><td><b>{{ o.name }}</b>{% if o.enabled is false %} <span class="badge b-unknown">disabled</span>{% endif %}</td><td>{{ o.vendor }}</td><td>{{ o.host }}:{{ o.snmp_port }}</td><td>{{ pn.get(o.profile_id,'-') }}</td>
+<td class="row"><form class="inline" method="post" action="/admin/devices/olt/{{ o.id }}/test"><button class="sec sm">Test SNMP</button></form>
+<a class="btn sm" href="/admin/devices/olt/{{ o.id }}/tools">🧰 Tools</a><a class="btn sm" href="/admin/device-details/olt/{{ o.id }}">Details</a> <a class="btn sm sec" href="/admin/devices/olt/{{ o.id }}">Edit</a>
+<form class="inline" method="post" action="/admin/devices/olt/{{ o.id }}/delete" onsubmit="return confirm('Remove OLT?')"><button class="dan sm">Remove</button></form></td></tr>
+{% else %}<tr><td colspan="5" class="mu">No OLT yet. Add BDCOM / V-SOL / C-Data EPON OLTs (read-only SNMP community).</td></tr>{% endfor %}</tbody></table></div></div>
+
+<div class="card"><div class="row" style="margin-bottom:10px"><h2 style="margin:0;margin-right:auto">🧩 OLT OID profiles</h2>
+<form class="row" method="post" action="/admin/devices/profile-new"><input name="name" placeholder="New profile name" style="width:180px"><button class="sm">+ Add profile</button></form></div>
+<table><tbody><tr><th>Profile</th><th>Vendor</th><th>OIDs set</th><th></th></tr>
+{% for p in profiles %}<tr><td><b>{{ p.name }}</b></td><td>{{ p.vendor }}</td><td>{% if pc[p.id] %}<span class="badge b-online">{{ pc[p.id] }} fields</span>{% else %}<span class="badge b-weak">not configured</span>{% endif %}</td>
+<td class="row"><a class="btn sm sec" href="/admin/devices/profile/{{ p.id }}">Edit OIDs</a>
+<form class="inline" method="post" action="/admin/devices/profile/{{ p.id }}/delete" onsubmit="return confirm('Delete profile?')"><button class="dan sm">Delete</button></form></td></tr>{% endfor %}</tbody></table>
+<p class="mu" style="font-size:13px">Which PON/ONU a customer sits on is found with standard SNMP (OLT MAC table), which works for all vendors. Optical power, distance, status use vendor OIDs that depend on model/firmware. Set them once per profile using <b>OLT → Tools → Discover</b>.</p></div>
+{% endblock %}

@@ -1,0 +1,52 @@
+{% extends "base.html" %}{% block content %}
+<div class="card"><div class="row" style="justify-content:space-between"><h2 style="margin:0">🧰 OLT tools · {{ o.name }} <span class="mu" style="font-size:14px">{{ o.host }} · profile: {{ prof.name if prof else 'none' }}</span></h2><a class="btn sm sec" href="/admin/devices">← Devices</a></div></div>
+<div class="grid g2">
+<div class="card"><h2>1) Locate ONU by customer MAC</h2><p class="mu">Tests the MAC-table lookup and shows the optical values from the current profile.</p>
+<form method="post"><input type="hidden" name="action" value="locate"><input name="mac" placeholder="Customer router MAC" value="{{ form.mac }}" required><button>Locate</button></form></div>
+<div class="card"><h2>2) Weak-ONU scan</h2><p class="mu">Walks Rx power of every ONU on this OLT, lists weakest first and summarises each PON. Needs the Rx OID in the profile.</p>
+<form method="post" action="/admin/devices/olt/{{ o.id }}/scan"><button>📊 Scan all ONUs (1-2 min)</button></form></div>
+<div class="card"><h2>3) SNMP walk</h2><form method="post"><input type="hidden" name="action" value="walk">
+<input name="oid_in" placeholder="OID e.g. 1.3.6.1.2.1.2.2.1.2" value="{{ form.oid_in }}"><button>Walk (first 400 rows)</button></form></div></div>
+
+<div class="card"><h2>4) Discover ONU OIDs (auto-match)</h2>
+<p class="mu">Give a customer MAC (or ONU index suffix). Optionally type the values you see in the OLT CLI for <b>that same ONU</b>: the portal finds which OIDs hold them (and the divisor) and can save them all with one click.</p>
+<form method="post"><input type="hidden" name="action" value="discover">
+<div class="grid g2"><div><label>Customer router MAC</label><input name="mac" placeholder="AA:BB:CC:DD:EE:FF" value="{{ form.mac }}"></div>
+<div><label>…or ONU index suffix</label><input name="suffix" placeholder="e.g. 432 or 1.3" value="{{ form.suffix }}"></div></div>
+<label>Start OID (default: vendor enterprise OID)</label><input name="start" value="{{ form.start }}">
+<details open><summary>Known values from the OLT CLI (for auto-match)</summary>
+<div class="grid" style="margin-top:8px">
+<div><label>ONU Rx dBm</label><input name="known_rx" value="{{ form.known_rx }}" placeholder="-21.5"></div>
+<div><label>ONU Tx dBm</label><input name="known_tx" value="{{ form.known_tx }}" placeholder="2.3"></div>
+<div><label>OLT Rx dBm</label><input name="known_olt_rx" value="{{ form.known_olt_rx }}" placeholder="-22.1"></div>
+<div><label>Distance (m)</label><input name="known_distance" value="{{ form.known_distance }}" placeholder="1250"></div>
+<div><label>Temperature °C</label><input name="known_temp" value="{{ form.known_temp }}" placeholder="38"></div>
+<div><label>Voltage V</label><input name="known_voltage" value="{{ form.known_voltage }}" placeholder="3.29"></div>
+<div><label>ONU LAN port speed (Mbps)</label><input name="known_uni_speed" value="{{ form.known_uni_speed }}" placeholder="100 or 1000"></div>
+<div><label>ONU MAC</label><input name="known_mac" value="{{ form.known_mac }}" placeholder="from CLI"></div>
+<div><label>ONU model (text)</label><input name="known_model" value="{{ form.known_model }}"></div>
+<div><label>ONU vendor (text)</label><input name="known_vendor" value="{{ form.known_vendor }}"></div></div></details>
+<button>Discover (can take 1-2 min)</button></form></div>
+
+{% if result %}<div class="card"><h2>Result</h2>
+{% if result.kind=='walk' %}<p class="mu">{{ result.total }} rows (showing {{ result.rows|length }})</p><div class="scroll"><table><tbody>{% for r in result.rows %}<tr><td><code>{{ r[0] }}</code></td><td>{{ r[1] }}</td><td>{{ r[2] }}</td></tr>{% endfor %}</tbody></table></div>
+{% elif result.kind=='locate' %}{% if result.data.found %}<p>✅ <b>{{ result.data.ifname }}</b> · PON {{ result.data.pon }} · ONU {{ result.data.onu }} · link {{ result.data.link }} · index suffix <code>{{ result.data.suffix }}</code></p>
+<table><tbody>{% for k,v in result.data.fields.items() %}<tr><td>{{ k }}</td><td>{{ v.value }} {{ v.unit or '' }}</td></tr>{% else %}<tr><td class="mu">No optical OIDs returned. Use Discover.</td></tr>{% endfor %}</tbody></table>
+{% else %}<p>❌ MAC not found on this OLT (or learned on an uplink port).</p>{% endif %}
+{% elif result.kind=='discover' %}<p class="mu">Index suffix <code>{{ result.suffix }}</code>{% if result.ifname %} ({{ result.ifname }}){% endif %} · searched {{ result.total }} OIDs under <code>{{ result.start }}</code> · {{ result.rows|length }} matches</p>
+{% if result.best and prof %}<div class="hint h-ok"><b>✨ Auto-detected {{ result.best|length }} field(s):</b>
+{% for b in result.best %}<span class="chip">{{ b.field }} ← {{ b.col }} ÷{{ b.div }}{{ ' µW' if b.unit=='uw' }}</span>{% endfor %}
+<form method="post" action="/admin/devices/profile/{{ prof.id }}/assign-many" style="margin-top:8px">
+<input type="hidden" name="back" value="/admin/devices/olt/{{ o.id }}/tools">
+{% for b in result.best %}<input type="hidden" name="field" value="{{ b.field }}"><input type="hidden" name="oid_col" value="{{ b.col }}"><input type="hidden" name="div" value="{{ b.div }}"><input type="hidden" name="unit" value="{{ b.unit }}">{% endfor %}
+<button class="ok sm">💾 Save all to profile “{{ prof.name }}”</button></form></div>{% endif %}
+<div class="scroll"><table><tbody><tr><th>Column OID</th><th>Value</th><th>Guess / match</th><th>Assign to</th></tr>
+{% for r in result.rows %}{% set m = r.matches[0] if r.matches else None %}<tr><td><code>{{ r.column }}</code></td><td>{{ r.value }}<br><span class="mu" style="font-size:11px">{{ r.type }}</span></td>
+<td>{% if r.matches %}{% for x in r.matches %}<span class="badge b-good">{{ x.field }} ÷{{ x.div }}</span> {% endfor %}{% else %}<span class="mu">{{ r.guess }}</span>{% endif %}</td>
+<td>{% if prof %}<form class="row" method="post" action="/admin/devices/profile/{{ prof.id }}/assign">
+<input type="hidden" name="oid_col" value="{{ r.column }}"><input type="hidden" name="back" value="/admin/devices/olt/{{ o.id }}/tools">
+<select name="field" style="width:150px">{% for k,l in fields %}<option value="{{ k }}" {{ 'selected' if m and m.field==k }}>{{ l }}</option>{% endfor %}</select>
+<input name="div" value="{{ m.div if m else 1 }}" style="width:60px" title="divisor"><select name="unit" style="width:70px"><option value="dbm">dBm</option><option value="uw" {{ 'selected' if m and m.unit=='uw' }}>µW</option></select><button class="sm">Set</button></form>{% endif %}</td></tr>
+{% else %}<tr><td colspan="4" class="mu">Nothing matched. Check the suffix or widen the start OID.</td></tr>{% endfor %}</tbody></table></div>{% endif %}
+</div>{% endif %}
+{% endblock %}

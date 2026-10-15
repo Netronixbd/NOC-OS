@@ -1,0 +1,10 @@
+{% extends "base.html" %}{% block content %}
+<div class="card"><h2>Active alarms</h2>
+{% for a in active %}<div class="cal {{ a.level }}"><span class="badge b-{{ a.level }}">{{ a.level }}</span>
+<div style="flex:1"><b>{{ a.device }}</b> · {{ a.message }}<div class="mu" style="font-size:12px">since {{ a.created_at|dt }}{% if a.ack_by %} · acknowledged by {{ a.ack_by }}{% endif %}</div></div>
+{% if not a.ack_by %}<form method="post" action="/admin/alarms/{{ a.id }}/ack"><button class="sm sec">Acknowledge</button></form>{% endif %}</div>
+{% else %}<div class="hint h-ok">✅ No active alarms.</div>{% endfor %}</div>
+<div class="card"><h2>Recent history</h2><div class="scroll"><table><tbody><tr><th>Device</th><th>Message</th><th>Level</th><th>Raised</th><th>Cleared</th></tr>
+{% for a in hist %}<tr><td>{{ a.device }}</td><td>{{ a.message }}</td><td><span class="badge b-{{ a.level }}">{{ a.level }}</span></td><td>{{ a.created_at|dt }}</td><td>{{ a.cleared_at|dt }}</td></tr>
+{% else %}<tr><td colspan="5" class="mu">Nothing yet.</td></tr>{% endfor %}</tbody></table></div></div>
+{% endblock %}

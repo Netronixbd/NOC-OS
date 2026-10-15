@@ -1,0 +1,1203 @@
+{% extends "base.html" %}{% block content %}
+<script id="ispUserDashboardStorage">
+(function () {
+  "use strict";
+  var state = {{ dashboard_preferences|default({})|tojson }};
+  var queue = Promise.resolve();
+
+  function persist() {
+    var snapshot = JSON.stringify(state);
+    queue = queue.catch(function () {}).then(function () {
+      return fetch("/admin/api/dashboard/preferences", {
+        method: "PUT",
+        credentials: "same-origin",
+        headers: {"Content-Type": "application/json"},
+        body: snapshot
+      });
+    }).then(function (response) {
+      if (!response.ok) throw new Error("HTTP " + response.status);
+    }).catch(function (error) {
+      console.warn("Could not save dashboard preferences:", error);
+    });
+  }
+
+  window.ispDashboardStorage = {
+    getItem: function (key) {
+      return Object.prototype.hasOwnProperty.call(state, key) ? String(state[key]) : null;
+    },
+    setItem: function (key, value) {
+      state[String(key)] = String(value);
+      persist();
+    },
+    removeItem: function (key) {
+      delete state[String(key)];
+      persist();
+    },
+    clear: function () {
+      state = {};
+      persist();
+    }
+  };
+})();
+</script>
+
+<div id="dashboardRefreshToolbar" class="row" style="justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:12px"><div class="live"><i></i><span id="upd">Connecting…</span></div>
+<div class="row" style="gap:8px;align-items:center;flex-wrap:wrap">
+<label for="refreshRate" class="mu" style="font-size:12px">Auto refresh</label>
+<select id="refreshRate" class="sm sec" style="min-width:90px">
+<option value="5">5 seconds</option>
+<option value="15">15 seconds</option>
+<option value="30">30 seconds</option>
+<option value="60">1 minute</option>
+</select>
+<button class="sm sec" id="rf">↻ Refresh now</button>
+</div></div>
+<div id="kpis" class="grid" style="margin-bottom:18px"></div>
+<div id="alarms"></div>
+<h3 style="margin:22px 0 10px">MikroTik routers</h3><div id="routers" class="grid g2"></div>
+<h3 style="margin:22px 0 10px">OLTs · ONU &amp; PON status</h3><div id="olts"></div>
+{% raw %}
+<script>
+(function(){
+var esc=function(s){return String(s==null?'':s).replace(/[&<>"']/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]})};
+var last=null,busy=false;
+function ring(v,label){v=v==null?0:v;var c=2*Math.PI*26,col=v>=95?'#dc2626':(v>=85?'#d97706':'#2563eb');
+ return '<svg width="66" height="66" viewBox="0 0 66 66"><circle cx="33" cy="33" r="26" fill="none" stroke="#e8ecf4" stroke-width="7"/><circle cx="33" cy="33" r="26" fill="none" stroke="'+col+'" stroke-width="7" stroke-linecap="round" stroke-dasharray="'+(c*v/100)+' '+c+'" transform="rotate(-90 33 33)" style="animation:ring 1s ease both"/><text x="33" y="38" text-anchor="middle" font-size="15" font-weight="700" fill="#0f172a">'+(v==null?'-':v)+'%</text></svg>'}
+function spark(a){if(!a||a.length<2)return '';var mx=Math.max.apply(null,a),mn=Math.min.apply(null,a),r=(mx-mn)||1,p=a.map(function(v,i){return (i*100/(a.length-1)).toFixed(1)+','+(26-(v-mn)/r*22).toFixed(1)}).join(' ');
+ return '<svg viewBox="0 0 100 28" width="100%" height="34" preserveAspectRatio="none"><polyline points="'+p+'" fill="none" stroke="#2563eb" stroke-width="2" stroke-linejoin="round" style="stroke-dasharray:400;animation:draw 1.2s ease both;--len:400"/></svg>'}
+function up(s){if(s==null)return '-';if(typeof s==='string')return s;var d=Math.floor(s/86400),h=Math.floor(s%86400/3600),m=Math.floor(s%3600/60);return (d?d+'d ':'')+h+'h '+m+'m'}
+function ago(sec){return sec<60?sec+'s':(sec<3600?Math.floor(sec/60)+'m':Math.floor(sec/3600)+'h')}
+function kpi(n,l,cls){return '<div class="card stat '+(cls||'')+'"><b data-count="'+n+'">'+n+'</b><span>'+l+'</span></div>'}
+function render(d){last=d;window.__ispDashboardData=d;
+ var R=d.routers||[],O=d.olts||[],act=0,rup=0,oup=0,on=0,ot=0;
+ R.forEach(function(r){if(r.active)act+=r.active;if(r.ok)rup++});O.forEach(function(o){if(o.ok)oup++;on+=o.onu_online||0;ot+=o.onu_total||0});
+ var al=(d.alarms||[]).length;
+ document.getElementById('kpis').innerHTML=kpi(act,'Active PPPoE users')+kpi(rup+'/'+R.length,'Routers reachable')+kpi(oup+'/'+O.length,'OLTs reachable')+kpi(on+' / '+ot,'ONUs online / total')+kpi((d.tickets||{}).open||0,'Open tickets')+kpi(al,'Active alarms',al?'al':'');
+ document.querySelectorAll('#kpis [data-count]').forEach(function(e){if(isNaN(+e.dataset.count))e.textContent=e.dataset.count;else e.textContent=e.dataset.count});
+ var ah=al?d.alarms.map(function(a){return '<div class="cal '+a.level+'"><span class="badge b-'+a.level+'">'+a.level+'</span><div><b>'+esc(a.device)+'</b> · '+esc(a.message)+'<div class="mu" style="font-size:12px">since '+ago(a.since)+' ago'+(a.ack?' · ack by '+esc(a.ack):'')+'</div></div></div>'}).join(''):'<div class="hint h-ok">✅ All monitored devices are healthy.</div>';
+ document.getElementById('alarms').innerHTML='<div class="card"><h2>Alarms</h2>'+ah+'</div>';
+ document.getElementById('routers').innerHTML=R.length?R.map(function(r,i){
+  var dot=r.ok?'<i class="dot on"></i>':'<i class="dot off"></i>';
+  return '<div class="card" style="--i:'+i+'"><div class="row" style="justify-content:space-between;margin-bottom:12px"><div><b>'+dot+' '+esc(r.name)+'</b><div class="mu" style="font-size:12.5px">'+esc(r.host)+(r.identity?' · '+esc(r.identity):'')+'</div></div>'+
+  '<span class="badge b-'+(r.ok?'up':'down')+'">'+(r.ok?'online':'down')+'</span></div>'+
+  (r.ok?'<div class="row" style="gap:18px;align-items:center"><div style="text-align:center">'+ring(r.cpu)+'<div class="mu" style="font-size:12px">CPU</div></div>'+
+   '<div style="flex:1;min-width:120px"><div class="mu" style="font-size:12px">Memory '+(r.mem_pct==null?'-':r.mem_pct+'%')+'</div><div class="gauge"><i style="width:'+(r.mem_pct||0)+'%;background:'+((r.mem_pct||0)>90?'#dc2626':'#2563eb')+'"></i></div>'+
+   '<div style="margin-top:10px"><span class="mu" style="font-size:12px">PPPoE active</span><div style="font-size:24px;font-weight:700">'+(r.active==null?'-':r.active)+'</div></div></div></div>'+
+   '<div style="margin-top:6px">'+spark(r.spark)+'</div><div class="mu" style="font-size:12.5px;margin-top:6px">Uptime '+esc(up(r.uptime))+' · '+esc(r.version||'-')+' · '+esc(r.board||'')+' · via '+esc(r.via||'')+'</div>'
+  :'<div class="hint h-err">'+esc(r.error||'No response')+'</div>')+'</div>'}).join(''):'<div class="card mu">No routers added yet. <a href="/admin/devices/router/new">Add a router</a></div>';
+ document.getElementById('olts').innerHTML=O.length?O.map(function(o,i){
+  var pct=o.onu_total?Math.round(o.onu_online*100/o.onu_total):0,dot=o.ok?'<i class="dot on"></i>':'<i class="dot off"></i>';
+  var pons=(o.pons||[]).map(function(p,k){var ratio=p.total?p.online/p.total:1,cls=(!p.up&&p.total)?'bad':(p.total&&ratio<0.7?'warn':'');
+   return '<div class="tile '+cls+'" style="--i:'+k+'"><div class="t"><span>PON '+esc(p.pon)+'</span><span class="badge b-'+(p.up?'up':'down')+'" style="padding:0 7px;font-size:11px">'+(p.up?'up':'down')+'</span></div><div class="n">'+p.online+' / '+p.total+' ONU online</div><div class="gauge" style="height:6px"><i style="width:'+(p.total?ratio*100:0)+'%;background:'+(cls=='bad'?'#dc2626':(cls=='warn'?'#d97706':'#16a34a'))+'"></i></div></div>'}).join('');
+  return '<div class="card" style="--i:'+i+'"><div class="row" style="justify-content:space-between;margin-bottom:10px"><div><b>'+dot+' '+esc(o.name)+'</b><div class="mu" style="font-size:12.5px">'+esc(o.host)+' · '+esc(o.vendor||'')+(o.sysname?' · '+esc(o.sysname):'')+(o.uptime?' · up '+esc(up(o.uptime)):'')+'</div></div>'+
+   '<span class="badge b-'+(o.ok?'up':'down')+'">'+(o.ok?'reachable':'down')+'</span></div>'+
+   (o.ok?(o.onu_supported?'<div class="row" style="justify-content:space-between"><b style="font-size:22px">'+o.onu_online+' <span class="mu" style="font-size:14px;font-weight:500">/ '+o.onu_total+' ONUs online</span></b><span class="mu">'+pct+'%</span></div><div class="gauge" style="margin-bottom:14px"><i style="width:'+pct+'%;background:'+(pct<80?'#d97706':'#16a34a')+'"></i></div><div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:10px">'+pons+'</div>'
+     :'<div class="hint h-info">This OLT does not expose ONU interfaces through the standard IF-MIB ('+(o.if_count||0)+' interfaces seen). PON port state is shown below if available; ONU counts need a vendor status OID.</div>'+(pons?'<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:10px">'+pons+'</div>':''))
+   :'<div class="hint h-err">'+esc(o.error||'No SNMP response')+'</div>')+'</div>'}).join(''):'<div class="card mu">No OLT added yet. <a href="/admin/devices/olt/new">Add an OLT</a></div>';
+ document.querySelectorAll('#kpis .card,#routers .card,#olts .card,#alarms .card').forEach(function(c){c.style.animation='none'});
+ tick()}
+function tick(){if(!last)return;var el=document.getElementById('upd');el.textContent=last.ts?('Live · updated '+Math.max(0,Math.round(Date.now()/1000-last.ts))+'s ago (polls every '+last.interval+'s)'):'Collecting first snapshot…'}
+function load(refresh){if(busy)return;busy=true;var b=document.getElementById('rf');if(refresh){b.disabled=true;b.textContent='Refreshing…'}
+ fetch('/admin/api/dashboard'+(refresh?'?refresh=1':'')).then(function(r){if(r.redirected)location.reload();return r.json()}).then(function(d){render(d);if(!d.ts&&!refresh){busy=false;load(1);return}}).catch(function(){document.getElementById('upd').textContent='Connection problem…'}).finally(function(){busy=false;b.disabled=false;b.textContent='↻ Refresh now'})}
+document.getElementById('rf').onclick=function(){load(1)};
+var refreshTimer=null;
+var refreshSelect=document.getElementById('refreshRate');
+var savedRate='15';
+try { savedRate=window.ispDashboardStorage.getItem('ispPortalRefreshRate')||'15'; } catch(e) {}
+if(!['5','15','30','60'].includes(savedRate)) savedRate='15';
+refreshSelect.value=savedRate;
+function startRefresh(){
+  if(refreshTimer) clearInterval(refreshTimer);
+  var seconds=parseInt(refreshSelect.value,10)||15;
+  try { window.ispDashboardStorage.setItem('ispPortalRefreshRate',String(seconds)); } catch(e) {}
+  refreshTimer=setInterval(function(){load(0)},seconds*1000);
+}
+refreshSelect.addEventListener('change',startRefresh);
+load(0);startRefresh();setInterval(tick,1000);
+})();
+</script>
+{% endraw %}
+
+<style>
+#dashCustomizeBar{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:0 0 14px}
+#dashCustomizeBar button{cursor:pointer}
+#dashBoardWidgets{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px;align-items:start}
+#dashBoardWidgets .dash-widget{min-width:0;min-height:60px;position:relative}
+#dashBoardWidgets .dash-widget.dash-wide{grid-column:1/-1}
+#dashBoardWidgets .dash-widget.dash-small{max-width:100%;font-size:12px}
+.dash-widget-head{display:flex;align-items:center;gap:8px;margin-bottom:8px;padding:6px 8px;border:1px dashed var(--line,#777);border-radius:8px;cursor:grab}
+.dash-widget-head .dash-grip{opacity:.65}
+.dash-widget-head .dash-name{font-weight:600;margin-right:auto}
+.dash-widget-head button{padding:2px 7px}
+.dash-widget.dash-hidden{display:none!important}
+.dash-widget.dash-dragging{opacity:.45}
+.dash-detail-link{display:inline-flex;margin-top:10px;margin-right:6px}
+@media(max-width:760px){ #dashBoardWidgets{grid-template-columns:minmax(0,1fr)}#dashBoardWidgets .dash-widget.dash-wide{grid-column:auto}}
+
+/* Light Modern NOC dashboard */
+body:has(#dashCustomizeBar) {
+    background: #f4f7fb !important;
+    color: #17243b !important;
+}
+body:has(#dashCustomizeBar) .card,
+body:has(#dashCustomizeBar) #dashCustomizePanel,
+body:has(#dashCustomizeBar) .dash-widget {
+    background: #ffffff !important;
+    color: #17243b !important;
+    border: 1px solid #e1e8f2 !important;
+    border-radius: 14px !important;
+    box-shadow: 0 4px 18px rgba(28, 52, 92, .055);
+}
+body:has(#dashCustomizeBar) h1,
+body:has(#dashCustomizeBar) h2,
+body:has(#dashCustomizeBar) h3,
+body:has(#dashCustomizeBar) h4 {
+    color: #172b4d;
+    letter-spacing: -.02em;
+}
+body:has(#dashCustomizeBar) .mu {
+    color: #64748b !important;
+}
+#dashCustomizeBar {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 9px;
+    padding: 12px 14px;
+    margin-bottom: 16px;
+    background: #fff;
+    border: 1px solid #e1e8f2;
+    border-radius: 14px;
+    box-shadow: 0 4px 18px rgba(28, 52, 92, .045);
+}
+#dashCustomizeBar button,
+#dashCustomizePanel button {
+    min-height: 36px;
+    border-radius: 9px;
+    cursor: pointer;
+}
+#dashCustomizeBar button:first-child {
+    background: #eaf2ff;
+    color: #185abd;
+    border: 1px solid #cfe0ff;
+}
+#dashCustomizeBar button:hover,
+#dashCustomizePanel button:hover {
+    filter: brightness(.97);
+}
+#dashCustomizePanel {
+    padding: 16px;
+}
+#dashBoardWidgets {
+    gap: 16px !important;
+}
+#dashBoardWidgets .dash-widget {
+    min-width: 0;
+    padding: 16px !important;
+    overflow-wrap: anywhere;
+}
+#dashBoardWidgets .dash-widget-head {
+    background: #f8faff;
+    border-color: #dce6f5;
+    border-radius: 10px;
+}
+#kpis .card,
+#routers .card,
+#olts .card,
+#alarms .card,
+#recentHistoryLightPatch {
+    transition: box-shadow .18s ease, transform .18s ease;
+}
+#kpis .card:hover,
+#routers .card:hover,
+#olts .card:hover,
+#recentHistoryLightPatch:hover {
+    box-shadow: 0 8px 24px rgba(28, 52, 92, .09);
+}
+#recentHistoryLightPatch {
+    box-sizing: border-box;
+    width: 100%;
+    margin: 16px 0;
+    padding: 18px;
+    background: #fff;
+    color: #17243b;
+    border: 1px solid #e1e8f2;
+    border-radius: 14px;
+    box-shadow: 0 4px 18px rgba(28, 52, 92, .055);
+}
+#recentHistoryLightPatch .history-title {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-bottom: 12px;
+    font-size: 16px;
+    font-weight: 700;
+}
+#recentHistoryLightPatch .history-count {
+    padding: 3px 8px;
+    border-radius: 20px;
+    background: #eaf2ff;
+    color: #185abd;
+    font-size: 11px;
+}
+#recentHistoryLightPatch .history-row {
+    display: grid;
+    grid-template-columns: 130px minmax(0, 1fr);
+    gap: 12px;
+    padding: 10px 0;
+    border-top: 1px solid #edf1f7;
+    font-size: 13px;
+}
+#recentHistoryLightPatch .history-time {
+    color: #64748b;
+    font-variant-numeric: tabular-nums;
+}
+#recentHistoryLightPatch .history-message {
+    min-width: 0;
+    overflow-wrap: anywhere;
+}
+#recentHistoryLightPatch .history-empty {
+    padding: 14px 0;
+    color: #64748b;
+    font-size: 13px;
+}
+.dash-detail-link {
+    min-height: 32px;
+    align-items: center;
+    padding: 6px 10px;
+    border-radius: 8px;
+    background: #eaf2ff;
+    color: #185abd !important;
+    text-decoration: none;
+    font-weight: 600;
+}
+@media(max-width:760px) {
+    #dashCustomizeBar {
+        align-items: stretch;
+        padding: 10px;
+    }
+    #dashCustomizeBar button {
+        flex: 1 1 42%;
+    }
+    #dashCustomizeBar #dashLayoutStatus {
+        flex: 1 1 100%;
+    }
+    #dashBoardWidgets {
+        grid-template-columns: minmax(0, 1fr) !important;
+    }
+    #dashBoardWidgets .dash-widget.dash-wide {
+        grid-column: auto !important;
+    }
+    #dashBoardWidgets .dash-widget {
+        padding: 11px !important;
+    }
+    #recentHistoryLightPatch {
+        padding: 13px;
+    }
+    #recentHistoryLightPatch .history-row {
+        grid-template-columns: 1fr;
+        gap: 4px;
+    }
+}
+
+
+/* Professional compact NOC layout */
+#dashCustomizeBar {
+    padding: 8px 10px !important;
+    gap: 7px !important;
+    border-radius: 12px !important;
+}
+#dashCustomizeBar button {
+    min-height: 30px !important;
+    padding: 5px 9px !important;
+    font-size: 12px !important;
+}
+#proDashboardControls {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-right: 3px;
+}
+.pro-icon-btn {
+    display: inline-flex;
+    justify-content: center;
+    align-items: center;
+    width: 31px;
+    height: 31px;
+    padding: 0 !important;
+    border: 1px solid #dbe5f2 !important;
+    border-radius: 9px !important;
+    background: #f5f8ff !important;
+    color: #285bb5 !important;
+    font-size: 15px !important;
+    line-height: 1;
+    text-decoration: none !important;
+    cursor: pointer;
+}
+.pro-icon-btn:hover {
+    background: #e8f0ff !important;
+}
+#proDevicePanel {
+    margin: 0 0 14px;
+    padding: 15px;
+    background: #fff;
+    border: 1px solid #dfe7f2;
+    border-radius: 13px;
+    box-shadow: 0 5px 18px rgba(25, 50, 90, .055);
+}
+#proDevicePanel[hidden] {
+    display: none !important;
+}
+#proDevicePanel .pro-device-list {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap: 8px;
+    margin-top: 10px;
+}
+.pro-device-choice {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    min-width: 0;
+    padding: 9px 10px;
+    border: 1px solid #e7edf5;
+    border-radius: 9px;
+    background: #fbfcff;
+    font-size: 12px;
+}
+.pro-device-choice input {
+    flex-shrink: 0;
+}
+.pro-device-choice span {
+    min-width: 0;
+    overflow-wrap: anywhere;
+}
+.pro-device-kind {
+    display: block;
+    margin-bottom: 2px;
+    color: #718096;
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: .05em;
+}
+.pro-card-actions {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    margin-left: auto;
+}
+.pro-card-actions .pro-icon-btn {
+    width: 27px;
+    height: 27px;
+    font-size: 13px !important;
+}
+#dashBoardWidgets .dash-widget {
+    border-radius: 13px !important;
+}
+#dashBoardWidgets .dash-widget-head {
+    padding: 5px 7px !important;
+    margin-bottom: 10px !important;
+}
+#alarms .card,
+#alarms > div {
+    border-radius: 10px;
+}
+.pro-alarm-top {
+    border-left: 3px solid #d97706 !important;
+}
+.pro-alarm-critical {
+    border-left-color: #dc2626 !important;
+}
+.pro-alarm-warning {
+    border-left-color: #d97706 !important;
+}
+.pro-alarm-info {
+    border-left-color: #2563eb !important;
+}
+.pro-status-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 3px 7px;
+    border-radius: 20px;
+    background: #e8f8ef;
+    color: #137342;
+    font-size: 10px;
+    font-weight: 700;
+}
+.pro-status-pill.offline {
+    background: #fff0f0;
+    color: #bd2828;
+}
+@media(max-width:760px) {
+    #dashCustomizeBar {
+        gap: 6px !important;
+    }
+    #proDashboardControls {
+        width: 100%;
+        justify-content: flex-end;
+    }
+    #proDevicePanel .pro-device-list {
+        grid-template-columns: minmax(0, 1fr);
+    }
+    #dashBoardWidgets {
+        grid-template-columns: minmax(0, 1fr) !important;
+    }
+    #dashBoardWidgets .dash-widget.dash-wide {
+        grid-column: auto !important;
+    }
+    .pro-card-actions .pro-icon-btn {
+        width: 29px;
+        height: 29px;
+    }
+}
+
+
+/* Compact live status / auto-refresh controls */
+#compactRefreshControlsPatch {}
+
+/* Target common refresh-control containers without changing JS behavior */
+body:has(#dashCustomizeBar) .refresh-controls,
+body:has(#dashCustomizeBar) .refresh-bar,
+body:has(#dashCustomizeBar) .dashboard-toolbar,
+body:has(#dashCustomizeBar) .auto-refresh-controls {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin: 4px 0 10px;
+    padding: 6px 9px;
+    background: #fff;
+    border: 1px solid #e1e8f2;
+    border-radius: 10px;
+    box-shadow: none;
+    font-size: 12px;
+}
+body:has(#dashCustomizeBar) .refresh-controls button,
+body:has(#dashCustomizeBar) .refresh-bar button,
+body:has(#dashCustomizeBar) .dashboard-toolbar button,
+body:has(#dashCustomizeBar) .auto-refresh-controls button {
+    min-height: 27px;
+    padding: 3px 8px;
+    border-radius: 7px;
+    font-size: 11px;
+}
+body:has(#dashCustomizeBar) .refresh-controls select,
+body:has(#dashCustomizeBar) .refresh-bar select,
+body:has(#dashCustomizeBar) .dashboard-toolbar select,
+body:has(#dashCustomizeBar) .auto-refresh-controls select {
+    min-height: 27px;
+    padding: 3px 7px;
+    border-radius: 7px;
+    font-size: 11px;
+}
+@media(max-width:760px) {
+    body:has(#dashCustomizeBar) .refresh-controls,
+    body:has(#dashCustomizeBar) .refresh-bar,
+    body:has(#dashCustomizeBar) .dashboard-toolbar,
+    body:has(#dashCustomizeBar) .auto-refresh-controls {
+        justify-content: flex-start;
+        gap: 5px;
+    }
+}
+
+
+/* Dashboard UX refinement */
+#dashboardRefreshToolbar {
+  display:flex !important;
+  align-items:center !important;
+  justify-content:space-between !important;
+  gap:8px !important;
+  padding:9px 12px !important;
+  border:1px solid #dbe4f0 !important;
+  border-radius:12px !important;
+  background:#fff !important;
+  box-shadow:0 3px 12px rgba(15,23,42,.045) !important;
+}
+#dashboardRefreshToolbar .live { font-size:12px !important; }
+#dashboardRefreshToolbar label { margin:0 !important; }
+#dashboardRefreshToolbar select,
+#dashboardRefreshToolbar button {
+  min-height:29px !important;
+  height:29px !important;
+  padding:4px 9px !important;
+  font-size:12px !important;
+  border-radius:7px !important;
+}
+#dashCustomizeBar {
+  display:flex;
+  align-items:center;
+  flex-wrap:wrap;
+  gap:8px;
+  padding:12px 14px;
+  margin:12px 0;
+  border:1px solid #dbe4f0;
+  border-radius:12px;
+  background:#f8fafc;
+}
+#dashCustomizePanel, #proDevicePanel {
+  border:1px solid #dbe4f0;
+  border-radius:12px;
+  padding:14px;
+  margin:8px 0 14px;
+  background:#fff;
+  box-shadow:0 5px 20px rgba(15,23,42,.05);
+}
+#dashCustomizeBar button, #dashCustomizePanel button {
+  border-radius:8px;
+}
+@media(max-width:640px) {
+  #dashboardRefreshToolbar { align-items:flex-start !important; }
+  #dashboardRefreshToolbar > .row {
+    justify-content:flex-start !important;
+    gap:5px !important;
+  }
+  #dashboardRefreshToolbar select,
+  #dashboardRefreshToolbar button { min-height:28px !important; }
+  #dashCustomizeBar { padding:10px; }
+}
+
+</style>
+<div id="dashCustomizeBar">
+  <button type="button" class="sec sm" id="dashCustomize">⚙ Customize dashboard</button>
+  <button type="button" class="sec sm" id="dashSave">Save layout</button>
+  <button type="button" class="sec sm" id="dashReset">Reset layout</button>
+  <span class="mu" id="dashLayoutStatus" style="font-size:12px">Layout saved in this browser</span>
+</div>
+<div id="dashCustomizePanel" class="card" style="display:none;margin-bottom:14px">
+  <b>Dashboard widgets</b>
+  <p class="mu" style="font-size:12px">Show/hide widgets, drag them by the handle, or use Size to change width.</p>
+  <div id="dashWidgetChoices" class="row" style="gap:12px;flex-wrap:wrap"></div>
+</div>
+<script>
+(function(){
+  'use strict';
+  var KEY='ispPortalDashboardLayoutV1';
+  var layout=document.createElement('div');
+  layout.id='dashBoardWidgets';
+  var first=document.getElementById('kpis');
+  if(!first || document.getElementById('dashBoardWidgets')) return;
+
+  var specs=[
+    {id:'kpis',title:'Summary KPIs',target:'kpis',wide:true},
+    {id:'alarms',title:'Active alarms',target:'alarms',wide:true},
+    {id:'routers',title:'MikroTik routers',target:'routers',heading:'MikroTik routers'},
+    {id:'olts',title:'OLT / ONU / PON status',target:'olts',heading:'OLTs · ONU & PON status',wide:true}
+  ];
+  var widgets={};
+  first.parentNode.insertBefore(layout,first);
+
+  specs.forEach(function(s){
+    var target=document.getElementById(s.target);
+    if(!target) return;
+    var section=document.createElement('section');
+    section.className='dash-widget'+(s.wide?' dash-wide':'');
+    section.dataset.widget=s.id;
+    var head=document.createElement('div');
+    head.className='dash-widget-head';
+    head.draggable=true;
+    head.innerHTML='<span class="dash-grip">⠿</span><span class="dash-name"></span><button type="button" class="sec sm dash-size">Size: Wide</button>';
+    head.querySelector('.dash-name').textContent=s.title;
+    section.appendChild(head);
+
+    if(s.heading){
+      var h=target.previousElementSibling;
+      if(h && h.tagName==='H3') section.appendChild(h);
+    }
+    section.appendChild(target);
+    layout.appendChild(section);
+    widgets[s.id]=section;
+    head.querySelector('.dash-size').addEventListener('click',function(){
+      section.classList.toggle('dash-wide');
+      section.classList.toggle('dash-small');
+      var wide=section.classList.contains('dash-wide');
+      this.textContent='Size: '+(wide?'Wide':section.classList.contains('dash-small')?'Compact':'Normal');
+      save(false);
+    });
+    head.addEventListener('dragstart',function(e){
+      section.classList.add('dash-dragging');
+      e.dataTransfer.setData('text/plain',s.id);
+      e.dataTransfer.effectAllowed='move';
+    });
+    head.addEventListener('dragend',function(){section.classList.remove('dash-dragging');});
+    section.addEventListener('dragover',function(e){e.preventDefault();e.dataTransfer.dropEffect='move';});
+    section.addEventListener('drop',function(e){
+      e.preventDefault();
+      var id=e.dataTransfer.getData('text/plain'), moving=widgets[id];
+      if(moving && moving!==section){
+        var rect=section.getBoundingClientRect();
+        if(e.clientY>rect.top+rect.height/2 || e.clientX>rect.left+rect.width/2)
+          section.after(moving);
+        else section.before(moving);
+        save(false);
+      }
+    });
+  });
+
+  function current(){
+    var order=Array.from(layout.children).map(function(w){return w.dataset.widget;});
+    var hidden={},sizes={};
+    Object.keys(widgets).forEach(function(id){
+      hidden[id]=widgets[id].classList.contains('dash-hidden');
+      sizes[id]=widgets[id].classList.contains('dash-wide')?'wide':
+        widgets[id].classList.contains('dash-small')?'compact':'normal';
+    });
+    return {order:order,hidden:hidden,sizes:sizes};
+  }
+  function apply(d){
+    if(!d) return;
+    (d.order||[]).forEach(function(id){
+      if(widgets[id]) layout.appendChild(widgets[id]);
+    });
+    Object.keys(widgets).forEach(function(id){
+      var w=widgets[id],size=(d.sizes||{})[id]||'wide';
+      w.classList.toggle('dash-hidden',!!((d.hidden||{})[id]));
+      w.classList.toggle('dash-wide',size==='wide');
+      w.classList.toggle('dash-small',size==='compact');
+      var b=w.querySelector('.dash-size');
+      if(b)b.textContent='Size: '+(size==='wide'?'Wide':size==='compact'?'Compact':'Normal');
+    });
+    choices();
+  }
+  function save(show){
+    try{
+      window.ispDashboardStorage.setItem(KEY,JSON.stringify(current()));
+      var status=document.getElementById('dashLayoutStatus');
+      if(status)status.textContent=show?'Layout saved in this browser':'Layout updated';
+    }catch(e){
+      var status=document.getElementById('dashLayoutStatus');
+      if(status)status.textContent='Could not save layout in browser storage';
+    }
+    choices();
+  }
+  function choices(){
+    var box=document.getElementById('dashWidgetChoices');
+    if(!box)return;
+    box.innerHTML='';
+    Object.keys(widgets).forEach(function(id){
+      var label=document.createElement('label');
+      label.style.cssText='display:flex;gap:6px;align-items:center';
+      var input=document.createElement('input');
+      input.type='checkbox';input.checked=!widgets[id].classList.contains('dash-hidden');
+      input.addEventListener('change',function(){
+        widgets[id].classList.toggle('dash-hidden',!input.checked);save(false);
+      });
+      label.appendChild(input);
+      label.appendChild(document.createTextNode(widgets[id].querySelector('.dash-name').textContent));
+      box.appendChild(label);
+    });
+  }
+  document.getElementById('dashCustomize').onclick=function(){
+    var p=document.getElementById('dashCustomizePanel');
+    p.style.display=p.style.display==='none'?'block':'none';
+    choices();
+  };
+  document.getElementById('dashSave').onclick=function(){save(true);};
+  document.getElementById('dashReset').onclick=function(){
+    try{window.ispDashboardStorage.removeItem(KEY);}catch(e){}
+    apply({order:['kpis','alarms','routers','olts'],hidden:{},sizes:{kpis:'wide',alarms:'wide',routers:'normal',olts:'wide'}});
+    save(true);
+  };
+  try{apply(JSON.parse(window.ispDashboardStorage.getItem(KEY)||'null'));}catch(e){}
+  choices();
+
+  // Move the actual Live / Auto Refresh / Refresh Now row below dashboard widgets.
+  var refreshToolbar=document.getElementById('dashboardRefreshToolbar');
+  if(refreshToolbar && layout.parentNode){
+    layout.insertAdjacentElement('afterend',refreshToolbar);
+    refreshToolbar.style.marginTop='14px';
+    refreshToolbar.style.marginBottom='0';
+    refreshToolbar.style.width='100%';
+  }
+
+  // Add a Details link to each live dashboard device card, matched by snapshot order.
+  function addDetails(){
+    var d=window.__ispDashboardData;
+    if(!d)return;
+    [['routers',d.routers||[],'router'],['olts',d.olts||[],'olt']].forEach(function(set){
+      var container=document.getElementById(set[0]), rows=set[1],kind=set[2];
+      if(!container)return;
+      Array.prototype.forEach.call(container.querySelectorAll('.card'),function(card,index){
+        var item=rows[index];
+        if(!item || card.querySelector('[data-device-details]'))return;
+        var a=document.createElement('a');
+        a.className='btn sm sec dash-detail-link';
+        a.dataset.deviceDetails='1';
+        a.href='/admin/device-details/'+kind+'/'+encodeURIComponent(item.id);
+        a.textContent='Details →';
+        card.appendChild(a);
+      });
+    });
+  }
+  var observer=new MutationObserver(addDetails);
+  ['routers','olts'].forEach(function(id){
+    var el=document.getElementById(id);
+    if(el)observer.observe(el,{childList:true,subtree:true});
+  });
+  addDetails();
+})();
+</script>
+
+
+<script id="recentHistoryLightPatch">
+(function () {
+    'use strict';
+
+    var HISTORY_KEY = 'ispPortalRecentHistoryV1';
+    var MAX_EVENTS = 30;
+    var previous = null;
+    var historyItems = [];
+
+    try {
+        var saved = window.ispDashboardStorage.getItem(HISTORY_KEY);
+        if (saved) {
+            var parsed = JSON.parse(saved);
+            if (Array.isArray(parsed)) historyItems = parsed.slice(0, MAX_EVENTS);
+        }
+    } catch (_) {}
+
+    function addEvent(message) {
+        historyItems.unshift({
+            at: Date.now(),
+            message: String(message).slice(0, 300)
+        });
+        historyItems = historyItems.slice(0, MAX_EVENTS);
+        try {
+            window.ispDashboardStorage.setItem(HISTORY_KEY, JSON.stringify(historyItems));
+        } catch (_) {}
+        renderHistory();
+    }
+
+    function el(tag, cls, value) {
+        var node = document.createElement(tag);
+        if (cls) node.className = cls;
+        if (value !== undefined) node.textContent = value;
+        return node;
+    }
+
+    function renderHistory() {
+        var box = document.getElementById('recentHistoryLightPatch');
+        if (!box) return;
+
+        box.replaceChildren();
+
+        var title = el('div', 'history-title', 'Recent History');
+        title.appendChild(el('span', 'history-count',
+            historyItems.length + ' events'));
+        box.appendChild(title);
+
+        if (!historyItems.length) {
+            box.appendChild(el('div', 'history-empty',
+                'Monitoring history will appear here as device or alarm changes are observed.'));
+            return;
+        }
+
+        historyItems.forEach(function (item) {
+            var row = el('div', 'history-row');
+            var date = new Date(item.at);
+            row.appendChild(el('div', 'history-time',
+                isNaN(date.getTime()) ? '' : date.toLocaleString()));
+            row.appendChild(el('div', 'history-message', item.message || 'Event'));
+            box.appendChild(row);
+        });
+    }
+
+    function statusOf(item) {
+        if (!item) return 'unknown';
+        if (item.ok === true) return 'online';
+        if (item.ok === false) return 'offline/error';
+        return 'unknown';
+    }
+
+    function observe(data) {
+        if (!data || typeof data !== 'object') return;
+
+        var current = { devices: {}, alarms: {} };
+        ['routers', 'olts'].forEach(function (kind) {
+            (Array.isArray(data[kind]) ? data[kind] : []).forEach(function (d) {
+                if (!d) return;
+                var id = kind + ':' + String(d.id == null ? d.name : d.id);
+                current.devices[id] = {
+                    name: String(d.name || d.host || id),
+                    status: statusOf(d)
+                };
+            });
+        });
+
+        (Array.isArray(data.alarms) ? data.alarms : []).forEach(function (a) {
+            if (!a) return;
+            var id = String(a.id == null ? (a.key || a.message) : a.id);
+            current.alarms[id] = {
+                device: String(a.device || 'Device'),
+                message: String(a.message || 'Alarm'),
+                level: String(a.level || 'alarm')
+            };
+        });
+
+        if (previous) {
+            Object.keys(current.devices).forEach(function (id) {
+                var now = current.devices[id];
+                var old = previous.devices[id];
+                if (old && old.status !== now.status) {
+                    addEvent(now.name + ': ' + old.status + ' → ' + now.status);
+                }
+            });
+
+            Object.keys(current.alarms).forEach(function (id) {
+                if (!previous.alarms[id]) {
+                    var a = current.alarms[id];
+                    addEvent('Active alarm [' + a.level + ']: ' +
+                        a.device + ' — ' + a.message);
+                }
+            });
+
+            Object.keys(previous.alarms).forEach(function (id) {
+                if (!current.alarms[id]) {
+                    var a = previous.alarms[id];
+                    addEvent('Alarm no longer active: ' +
+                        a.device + ' — ' + a.message);
+                }
+            });
+        }
+
+        previous = current;
+    }
+
+    function mount() {
+        var alarms = document.getElementById('alarms');
+        if (!alarms) return;
+
+        var box = document.getElementById('recentHistoryLightPatch');
+        if (!box) {
+            box = document.createElement('section');
+            box.id = 'recentHistoryLightPatch';
+            alarms.insertAdjacentElement('afterend', box);
+        }
+        renderHistory();
+    }
+
+    function tick() {
+        mount();
+        if (window.__ispDashboardData) observe(window.__ispDashboardData);
+    }
+
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', tick);
+    } else {
+        tick();
+    }
+
+    window.setInterval(tick, 2500);
+})();
+</script>
+
+
+<script id="proDashboardControlsPatch">
+(function () {
+    'use strict';
+
+    var HIDE_KEY = 'ispPortalHiddenDevicesV1';
+    var lastSignature = '';
+    var hiddenDevices = {};
+
+    try {
+        hiddenDevices = JSON.parse(window.ispDashboardStorage.getItem(HIDE_KEY) || '{}') || {};
+    } catch (_) {
+        hiddenDevices = {};
+    }
+
+    function byId(id) {
+        return document.getElementById(id);
+    }
+
+    function element(tag, cls, text) {
+        var e = document.createElement(tag);
+        if (cls) e.className = cls;
+        if (text !== undefined) e.textContent = text;
+        return e;
+    }
+
+    function getData() {
+        return window.__ispDashboardData || {};
+    }
+
+    function deviceId(kind, d) {
+        return kind + ':' + String(d.id == null ? (d.name || d.host || '') : d.id);
+    }
+
+    function persist() {
+        try {
+            window.ispDashboardStorage.setItem(HIDE_KEY, JSON.stringify(hiddenDevices));
+        } catch (_) {}
+    }
+
+    function ensurePanel() {
+        var bar = byId('dashCustomizeBar');
+        if (!bar) return;
+
+        var controls = byId('proDashboardControls');
+        if (!controls) {
+            controls = element('div', '');
+            controls.id = 'proDashboardControls';
+
+            var toggle = element('button', 'pro-icon-btn', '+');
+            toggle.type = 'button';
+            toggle.title = 'Add or remove devices from dashboard';
+            toggle.setAttribute('aria-label', 'Manage dashboard devices');
+            toggle.onclick = function () {
+                var panel = byId('proDevicePanel');
+                if (panel) panel.hidden = !panel.hidden;
+                refreshPanel();
+            };
+
+            controls.appendChild(toggle);
+            bar.insertBefore(controls, bar.firstChild);
+        }
+
+        var panel = byId('proDevicePanel');
+        if (!panel) {
+            panel = element('section', '');
+            panel.id = 'proDevicePanel';
+            panel.hidden = true;
+
+            var heading = element('div', '', 'Dashboard devices');
+            heading.style.fontWeight = '700';
+            panel.appendChild(heading);
+
+            var note = element('div', '', 'Select devices to show or hide. This does not delete devices from the database.');
+            note.style.cssText = 'margin-top:4px;color:#64748b;font-size:12px';
+            panel.appendChild(note);
+
+            var list = element('div', 'pro-device-list');
+            list.id = 'proDeviceList';
+            panel.appendChild(list);
+
+            bar.insertAdjacentElement('afterend', panel);
+        }
+    }
+
+    function refreshPanel() {
+        var list = byId('proDeviceList');
+        if (!list) return;
+
+        var data = getData();
+        var devices = [];
+        (Array.isArray(data.routers) ? data.routers : []).forEach(function (d) {
+            devices.push({ kind: 'router', data: d });
+        });
+        (Array.isArray(data.olts) ? data.olts : []).forEach(function (d) {
+            devices.push({ kind: 'olt', data: d });
+        });
+
+        var signature = devices.map(function (x) {
+            return deviceId(x.kind, x.data) + ':' + (x.data.name || x.data.host || '');
+        }).join('|');
+
+        if (signature === lastSignature && list.childElementCount) {
+            applyVisibility();
+            return;
+        }
+        lastSignature = signature;
+        list.replaceChildren();
+
+        if (!devices.length) {
+            list.appendChild(element('div', '', 'No monitored devices available yet.'));
+            return;
+        }
+
+        devices.forEach(function (item) {
+            var d = item.data;
+            var id = deviceId(item.kind, d);
+            var label = element('label', 'pro-device-choice');
+            var checkbox = document.createElement('input');
+            checkbox.type = 'checkbox';
+            checkbox.checked = !hiddenDevices[id];
+
+            var textWrap = element('span', '');
+            textWrap.appendChild(element('small', 'pro-device-kind',
+                item.kind === 'router' ? 'MikroTik / CCR' : 'OLT'));
+            textWrap.appendChild(document.createTextNode(
+                String(d.name || d.host || ('Device ' + d.id))
+            ));
+
+            checkbox.onchange = function () {
+                if (checkbox.checked) delete hiddenDevices[id];
+                else hiddenDevices[id] = true;
+                persist();
+                applyVisibility();
+            };
+
+            label.appendChild(checkbox);
+            label.appendChild(textWrap);
+            list.appendChild(label);
+        });
+
+        applyVisibility();
+    }
+
+    function cardsFor(kind) {
+        var container = byId(kind === 'router' ? 'routers' : 'olts');
+        if (!container) return [];
+        return Array.from(container.children).filter(function (node) {
+            return node.nodeType === 1;
+        });
+    }
+
+    function addCardActions(kind, item, card) {
+        if (!card || !item || card.querySelector('.pro-card-actions')) return;
+
+        var actions = element('span', 'pro-card-actions');
+
+        var details = element('a', 'pro-icon-btn', 'ⓘ');
+        details.href = '/admin/device-details/' + kind + '/' +
+            encodeURIComponent(item.id);
+        details.title = 'View device details';
+        details.setAttribute('aria-label', 'View details');
+
+        var edit = element('a', 'pro-icon-btn', '✎');
+        edit.href = '/admin/devices/' + kind + '/' + encodeURIComponent(item.id);
+        edit.title = 'Edit device configuration';
+        edit.setAttribute('aria-label', 'Edit device');
+
+        actions.appendChild(details);
+        actions.appendChild(edit);
+
+        var existingDetails = card.querySelector('[data-device-details], a[href*="/admin/device-details/"]');
+        if (existingDetails) {
+            existingDetails.remove();
+        }
+
+        var heading = card.querySelector('h3, h4, h5, strong');
+        if (heading && heading.parentElement) {
+            heading.parentElement.appendChild(actions);
+            heading.parentElement.style.display = 'flex';
+            heading.parentElement.style.alignItems = 'center';
+            heading.parentElement.style.flexWrap = 'wrap';
+            heading.parentElement.style.gap = '6px';
+        } else {
+            card.insertBefore(actions, card.firstChild);
+        }
+    }
+
+    function applyVisibility() {
+        var data = getData();
+        [
+            { kind: 'router', items: Array.isArray(data.routers) ? data.routers : [] },
+            { kind: 'olt', items: Array.isArray(data.olts) ? data.olts : [] }
+        ].forEach(function (group) {
+            var cards = cardsFor(group.kind);
+            cards.forEach(function (card, index) {
+                var item = group.items[index];
+                if (!item) return;
+
+                var id = deviceId(group.kind, item);
+                card.dataset.proDeviceId = id;
+                card.style.display = hiddenDevices[id] ? 'none' : '';
+                addCardActions(group.kind, item, card);
+            });
+        });
+    }
+
+    function moveAlarmsUp() {
+        var alarms = byId('alarms');
+        var widgets = byId('dashBoardWidgets');
+        if (!alarms || !widgets) return;
+
+        var alarmWidget = alarms.closest('.dash-widget');
+        if (alarmWidget && alarmWidget.parentElement === widgets &&
+            widgets.firstElementChild !== alarmWidget) {
+            widgets.insertBefore(alarmWidget, widgets.firstElementChild);
+        }
+    }
+
+    function styleAlarmCards() {
+        var alarms = byId('alarms');
+        if (!alarms) return;
+
+        Array.from(alarms.querySelectorAll('.card')).forEach(function (card) {
+            card.classList.add('pro-alarm-top');
+            var text = (card.innerText || '').toLowerCase();
+            if (/critical|fatal|emergency/.test(text)) {
+                card.classList.add('pro-alarm-critical');
+            } else if (/warning|major|high/.test(text)) {
+                card.classList.add('pro-alarm-warning');
+            } else {
+                card.classList.add('pro-alarm-info');
+            }
+        });
+    }
+
+    function tick() {
+        ensurePanel();
+        refreshPanel();
+        applyVisibility();
+        moveAlarmsUp();
+        styleAlarmCards();
+    }
+
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', tick);
+    } else {
+        tick();
+    }
+
+    window.setInterval(tick, 1500);
+})();
+</script>
+
+
+<script id="moveRefreshControlsToBottomPatch">
+(function () {
+  function moveRefreshControls() {
+    const norm = el => (el && el.innerText || "").replace(/\s+/g, " ").trim();
+    const all = Array.from(document.querySelectorAll("body *"));
+    const candidates = all.filter(el => {
+      const t = norm(el);
+      return t.length < 900 &&
+        /auto\s*refresh/i.test(t) &&
+        /refresh\s*now/i.test(t) &&
+        /live/i.test(t);
+    });
+
+    if (!candidates.length) return;
+
+    // Choose the smallest element containing the complete refresh toolbar.
+    candidates.sort((a, b) => norm(a).length - norm(b).length);
+    let toolbar = candidates[0];
+
+    // Prefer a compact toolbar wrapper when available.
+    let p = toolbar;
+    while (p && p !== document.body) {
+      const t = norm(p);
+      if (/auto\s*refresh/i.test(t) &&
+          /refresh\s*now/i.test(t) &&
+          /live/i.test(t) &&
+          t.length < 900) {
+        toolbar = p;
+        break;
+      }
+      p = p.parentElement;
+    }
+
+    const widgets = document.querySelector("#dashBoardWidgets");
+    if (!widgets || !widgets.parentElement || toolbar.contains(widgets)) return;
+
+    // Keep the controls and their event handlers intact; only change their position.
+    widgets.insertAdjacentElement("afterend", toolbar);
+    toolbar.style.setProperty("margin-top", "14px", "important");
+    toolbar.style.setProperty("margin-bottom", "0", "important");
+    toolbar.style.setProperty("max-width", "100%", "important");
+    toolbar.style.setProperty("align-self", "stretch", "important");
+  }
+
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", moveRefreshControls, {once:true});
+  } else {
+    moveRefreshControls();
+  }
+})();
+</script>
+
+{% endblock %}

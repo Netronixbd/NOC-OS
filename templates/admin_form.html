@@ -1,0 +1,12 @@
+{% extends "base.html" %}{% block content %}
+<div class="card" style="max-width:560px"><h2>{{ title }}</h2>
+<form method="post" action="{{ action }}">
+{% for f in fields %}
+{% if f.type=='checkbox' %}<label style="display:block;margin:6px 0 10px"><input type="checkbox" name="{{ f.name }}" value="1" {{ 'checked' if f.value }}>{{ f.label }}</label>
+{% else %}<label>{{ f.label }}</label>
+{% if f.type=='select' %}<select name="{{ f.name }}">{% for v,l in f.options %}<option value="{{ v }}" {{ 'selected' if v==f.value|string }}>{{ l }}</option>{% endfor %}</select>
+{% else %}<input type="{{ f.type }}" name="{{ f.name }}" value="{{ f.value if f.type!='password' else '' }}" autocomplete="off">{% endif %}
+{% if f.help %}<div class="mu" style="font-size:12px;margin:-6px 0 8px">{{ f.help }}</div>{% endif %}{% endif %}
+{% endfor %}
+<div class="row"><button>Save</button><a class="btn sec" href="{{ back }}">Cancel</a></div></form></div>
+{% endblock %}

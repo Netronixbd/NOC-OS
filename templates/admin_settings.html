@@ -1,0 +1,34 @@
+{% extends "base.html" %}{% block content %}
+<div class="card"><h2>🏷️ ISP branding</h2><p class="mu">Change the ISP/portal name and upload a logo. Supported formats: PNG, JPG or WEBP; maximum 2 MB.</p>
+{% if site_logo %}<div style="margin:10px 0;padding:12px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:10px"><img src="/brand-logo?v={{ site_logo }}" alt="Current ISP logo" style="max-width:220px;max-height:90px;object-fit:contain"></div>{% else %}<p class="mu">No custom logo uploaded; default branding is shown.</p>{% endif %}
+<form method="post" action="/admin/settings/branding" enctype="multipart/form-data">
+<label>ISP / Portal name</label><input name="site_title" value="{{ title }}" maxlength="80" required placeholder="Your ISP name">
+<label>Upload logo</label><input type="file" name="logo" accept="image/png,image/jpeg,image/webp">
+<div class="row"><button name="action" value="save">Save name / upload logo</button><button class="sec" name="action" value="remove_logo" onclick="return confirm('Remove current logo?')">Remove logo</button></div></form></div>
+
+<div class="card"><h2>🤖 Telegram bot</h2>
+<form method="post" action="/admin/settings/telegram">
+<label>Bot token {% if tg_token_masked %}<span class="mu">(saved: {{ tg_token_masked }}, leave blank to keep)</span>{% endif %}</label>
+<input name="token" placeholder="123456:ABC-DEF…" autocomplete="off">
+<label>Group chat ID</label><input name="chat_id" value="{{ tg_chat }}" placeholder="-1001234567890">
+<div class="row"><button name="action" value="save">Save</button><button class="sec" name="action" value="test">Save &amp; send test</button>
+<button class="dan" name="action" value="remove" onclick="return confirm('Remove Telegram settings?')">Remove</button></div></form>
+{% if seen %}<h3 style="margin-top:16px">Chats the bot has seen (click to fill)</h3>
+{% for id,t in seen.items() %}<div><code style="cursor:pointer" onclick="document.querySelector('[name=chat_id]').value='{{ id }}'">{{ id }}</code> {{ t }}</div>{% endfor %}
+{% else %}<p class="mu" style="font-size:13px">Create a bot with @BotFather, add it to the group as admin, send a message in the group. The chat ID shows up here after the token is saved.</p>{% endif %}
+<p class="mu" style="font-size:13px">Tickets in Telegram: buttons <b>⏳ Waiting for update</b> / <b>✅ Close</b>; <b>reply to the ticket message</b> to send a reply to the customer.</p></div>
+<div class="card"><h2>📟 Router brand database (OUI)</h2><p class="mu">{{ oui_n }} vendors loaded. Used to show the customer router brand from its MAC.</p>
+<form method="post" action="/admin/settings/oui" enctype="multipart/form-data" class="row"><button>⬇ Download latest from IEEE</button>
+<input type="file" name="file" accept=".csv" style="width:auto"><button class="sec">Upload oui.csv</button></form></div>
+<div class="card"><h2>📡 Monitoring &amp; alarms</h2><p class="mu">Routers and OLTs are polled in the background; alarms go to the dashboard and the Telegram group.</p>
+<form method="post" action="/admin/settings/monitor"><div class="grid">
+<div><label>Poll interval (s)</label><input name="mon_interval" value="{{ mon.mon_interval }}"></div>
+<div><label>CPU warning %</label><input name="mon_cpu_warn" value="{{ mon.mon_cpu_warn }}"></div>
+<div><label>CPU critical %</label><input name="mon_cpu_crit" value="{{ mon.mon_cpu_crit }}"></div>
+<div><label>PPPoE users drop % (alarm)</label><input name="mon_drop_pct" value="{{ mon.mon_drop_pct }}"></div>
+<div><label>PON ONU drop % (alarm)</label><input name="mon_pon_drop_pct" value="{{ mon.mon_pon_drop_pct }}"></div></div><button>Save thresholds</button></form></div>
+<div class="grid g2">
+<div class="card"><h2>Public portal options</h2><form method="post" action="/admin/settings/general"><input type="hidden" name="site_title" value="{{ title }}"><label style="display:block;margin:4px 0 10px"><input type="checkbox" name="public_suggest" value="1" {{ 'checked' if public_suggest }}>Show user-ID suggestions on the public portal</label><div class="mu" style="font-size:12px;margin-bottom:8px">{{ ru_n }} PPPoE users cached from routers (refreshes every 3 min)</div><button>Save</button></form></div>
+<div class="card"><h2>Change admin password</h2><form method="post" action="/admin/settings/password">
+<input type="password" name="old" placeholder="Current password" required><input type="password" name="new" placeholder="New password (8+ chars)" required><button>Change</button></form></div></div>
+{% endblock %}

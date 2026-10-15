@@ -1,0 +1,16 @@
+{% extends "base.html" %}{% block content %}
+<div class="card"><div class="row"><h2 style="margin:0;margin-right:auto">Users ({{ total }})</h2><a class="btn sm" href="/admin/users/new">+ Create PPPoE user</a>
+<form class="row" method="get"><input name="q" value="{{ q }}" placeholder="Search user id / name / phone"><button class="sm">Search</button></form></div>
+<div class="scroll"><table style="margin-top:12px"><tbody><tr><th>User ID</th><th>Name</th><th>Phone</th><th>ONU MAC</th><th></th></tr>
+{% for c in items %}<tr><td>{{ c.user_id }}</td><td>{{ c.name }}</td><td>{{ c.phone }}</td><td>{{ c.onu_mac }}</td>
+<td class="row"><a class="btn sm" href="/admin/d?uid={{ c.user_id }}">Diagnose</a><a class="btn sm sec" href="/admin/users/manage?uid={{ c.user_id }}">Manage</a><a class="btn sm sec" href="/admin/customers/{{ c.id }}">Edit</a>
+<form class="inline" method="post" action="/admin/customers/{{ c.id }}/delete" onsubmit="return confirm('Delete this customer and their complaints?')"><button class="dan sm">Delete</button></form></td></tr>
+{% else %}<tr><td colspan="5" class="mu">No customers. Add one, import CSV, or sync from a router in Devices.</td></tr>{% endfor %}</tbody></table></div></div>
+<div class="grid g2">
+<div class="card"><h2>Add / update customer</h2><form method="post" action="/admin/customers/add">
+<input name="user_id" placeholder="PPPoE User ID *" required><input name="name" placeholder="Name">
+<input name="phone" placeholder="Phone"><input name="address" placeholder="Address (optional)"><button>Save</button></form></div>
+<div class="card"><h2>Import CSV</h2><p class="mu">Columns: <code>user_id,name,phone,address</code></p>
+<form method="post" action="/admin/customers/import" enctype="multipart/form-data">
+<input type="file" name="file" accept=".csv" required><button>Import</button></form></div></div>
+{% endblock %}

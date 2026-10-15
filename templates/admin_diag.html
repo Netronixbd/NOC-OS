@@ -1,0 +1,150 @@
+{% extends "base.html" %}{% block content %}
+<div class="card"><div class="row" style="justify-content:space-between"><div><h2 style="margin:0">{{ cust.name if cust and cust.name else (uid or mac) }}</h2>
+<div class="mu">{{ uid }}{% if mac %} · {{ mac }}{% endif %}</div></div>
+<div class="row"><button class="sm sec" onclick="location.reload()">↻ Re-run</button>{% if uid %}<a class="btn sm sec" href="/admin/users/manage?uid={{ uid }}">Manage user</a>{% endif %}<a class="btn sm sec" href="/admin/diagnose">New search</a></div></div></div>
+<div class="card" style="padding:14px 18px"><label for="diag-customer-search"><b>Quick customer search</b></label><form method="get" action="/admin/diagnose" class="row" style="margin-top:7px"><div class="sg"><input id="diag-customer-search" name="q" data-suggest="/admin/api/suggest" data-min="2" placeholder="Type 2+ letters of username, customer name or phone" autocomplete="off"></div><button class="sm">Search</button><a class="btn sm sec" href="/admin/diagnose">Clear</a></form><div class="mu" style="font-size:12px;margin-top:6px">Suggestions are fetched from the portal customer database and configured MikroTik routers. Select a result to open its diagnosis.</div></div>
+<div id="diag" data-uid="{{ uid }}" data-mac="{{ mac }}">
+<div class="card" id="loader"><h3><span class="spin"></span>&nbsp; Collecting data…</h3><div id="steps"></div><div class="skel" style="width:90%"></div><div class="skel" style="width:70%"></div><div class="skel" style="width:80%"></div></div>
+<div id="out" style="display:none">
+<div id="hero"></div>
+<div class="tabs" id="tabs"><button data-t="ov" class="on">Overview</button><button data-t="live">Live session</button><button data-t="l2">L2 &amp; fiber</button><button data-t="rt">Customer router</button><button data-t="rp">Report &amp; reply</button></div>
+<div class="pane on" id="p-ov"></div><div class="pane" id="p-live"></div><div class="pane" id="p-l2"></div><div class="pane" id="p-rt"></div><div class="pane" id="p-rp"></div>
+</div></div>
+{% raw %}
+<script>
+(function(){
+var root=document.getElementById('diag'),uid=root.dataset.uid,mac=root.dataset.mac,D=null,live=null;
+var steps=['Connecting to MikroTik API','Reading PPPoE session, profile, pool & logs','Pinging customer router (20 × 100 ms)','Reading SNMP counters','Locating ONU on all OLTs (MAC table)','Reading optical power & distance','Building diagnosis'];
+var sd=document.getElementById('steps'),si=0;
+function stepTick(){if(si<steps.length)sd.insertAdjacentHTML('beforeend','<div class="hint h-info" style="--i:0">⏳ '+steps[si++]+'…</div>')}
+stepTick();var iv=setInterval(stepTick,1500);
+var esc=function(s){return String(s==null?'':s).replace(/[&<>"']/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]})};
+var $=function(i){return document.getElementById(i)};
+function bps(n){return n==null?'-':(n>=1e9?(n/1e9).toFixed(2)+' Gbps':(n>=1e6?(n/1e6).toFixed(2)+' Mbps':(n/1e3).toFixed(1)+' Kbps'))}
+function bytes(n){if(n==null)return '-';var u=['B','KB','MB','GB','TB'],i=0;while(n>=1024&&i<4){n/=1024;i++}return n.toFixed(i?2:0)+' '+u[i]}
+function kv(rows){var h='<div class="kv">';rows.forEach(function(r){if(r[1]===undefined||r[1]===null||r[1]==='')return;h+='<div><span>'+esc(r[0])+'</span><b>'+(r[2]?r[1]:esc(r[1]))+'</b></div>'});return h+'</div>'}
+function badge(c,t){return '<span class="badge b-'+c+'">'+esc(t)+'</span>'}
+function card(t,b,ex){return '<div class="card reveal" style="--i:0"><h2>'+t+'</h2>'+b+'</div>'}
+function gauge(v,label,q,low){if(v==null)return '';var pct=Math.max(2,Math.min(100,(v+35)/30*100)),col={good:'#16a34a',weak:'#d97706',high:'#d97706',bad:'#dc2626'}[q]||'#2563eb';
+ return '<div style="margin:10px 0"><div class="row" style="justify-content:space-between"><b>'+label+(low?' <span title="Low-confidence OID: verify against OLT CLI" style="color:#d97706">⚠</span>':'')+'</b><span>'+v+' dBm '+(q?badge(q,{good:'Good',weak:'Weak',high:'Too strong',bad:'Critical'}[q]):'')+'</span></div><div class="gauge"><i style="width:'+pct+'%;background:'+col+'"></i></div></div>'}
+function node(ic,t,s,cls){return '<div class="tile '+(cls||'')+'" style="min-width:140px;flex:1"><div class="t"><span>'+ic+' '+esc(t)+'</span></div><div class="n">'+(s||'')+'</div></div>'}
+function arrow(){return '<div style="align-self:center;color:#94a3b8;font-size:20px">→</div>'}
+
+/* ---------------- tabs */
+document.querySelectorAll('#tabs button').forEach(function(b){b.onclick=function(){document.querySelectorAll('#tabs button').forEach(function(x){x.classList.toggle('on',x===b)});document.querySelectorAll('.pane').forEach(function(p){p.classList.toggle('on',p.id==='p-'+b.dataset.t)});if(b.dataset.t==='live'&&live)live.resize()}});
+
+/* ---------------- live chart */
+function Live(){
+ var self=this,cv,ctx,dl=[],ul=[],prev=null,peakD=0,peakU=0,sumD=0,sumU=0,n=0,timer=null,alive=true,N=120;
+ self.mount=function(){$('p-live').innerHTML='<div class="card"><div class="row" style="justify-content:space-between;margin-bottom:8px"><h2 style="margin:0">Live traffic <span class="live" style="margin-left:8px"><i></i>2 s</span></h2><div class="row"><button class="dan sm" id="dc">⏏ Disconnect session</button></div></div><canvas id="cv" height="240"></canvas>'+
+   '<div class="kv" style="margin-top:14px" id="lk"></div><div id="dcs"></div></div><div class="card"><h2>Session totals</h2><div class="kv" id="st"></div></div>';
+  cv=$('cv');ctx=cv.getContext('2d');$('dc').onclick=self.disconnect;self.resize()};
+ self.resize=function(){if(!cv)return;var r=window.devicePixelRatio||1,w=cv.clientWidth||600;cv.width=w*r;cv.height=240*r;ctx.setTransform(r,0,0,r,0,0);draw()};
+ function nice(m){if(m<=0)return 1e6;var e=Math.pow(10,Math.floor(Math.log10(m))),f=m/e;return (f<=1?1:f<=2?2:f<=5?5:10)*e}
+ function draw(){if(!cv)return;var w=cv.clientWidth||600,h=240,pl=58,pb=22,pt=8,iw=w-pl-8,ih=h-pb-pt;ctx.clearRect(0,0,w,h);
+  var mx=nice(Math.max.apply(null,dl.concat(ul).concat([1e5]))*1.15);ctx.font='11px system-ui';ctx.fillStyle='#64748b';ctx.strokeStyle='#e8ecf4';ctx.lineWidth=1;
+  for(var i=0;i<=4;i++){var y=pt+ih-ih*i/4;ctx.beginPath();ctx.moveTo(pl,y);ctx.lineTo(w-8,y);ctx.stroke();ctx.textAlign='right';ctx.fillText(bps(mx*i/4),pl-6,y+4)}
+  function line(a,col,fill){if(a.length<2)return;ctx.beginPath();a.forEach(function(v,k){var x=pl+iw*k/(N-1)+iw*(N-a.length)/(N-1),y=pt+ih-ih*v/mx;k?ctx.lineTo(x,y):ctx.moveTo(x,y)});
+   ctx.strokeStyle=col;ctx.lineWidth=2;ctx.lineJoin='round';ctx.stroke();var lx=pl+iw,fx=pl+iw*(N-a.length)/(N-1);ctx.lineTo(lx,pt+ih);ctx.lineTo(fx,pt+ih);ctx.closePath();var g=ctx.createLinearGradient(0,pt,0,pt+ih);g.addColorStop(0,fill);g.addColorStop(1,'rgba(255,255,255,0)');ctx.fillStyle=g;ctx.fill()}
+  line(ul,'#16a34a','rgba(22,163,74,.22)');line(dl,'#2563eb','rgba(37,99,235,.25)');
+  ctx.textAlign='left';ctx.fillStyle='#2563eb';ctx.fillRect(pl,h-12,10,3);ctx.fillStyle='#334155';ctx.fillText('Download',pl+14,h-7);ctx.fillStyle='#16a34a';ctx.fillRect(pl+90,h-12,10,3);ctx.fillStyle='#334155';ctx.fillText('Upload',pl+104,h-7)}
+ function show(s,d,u){var wan='';if(Math.max(peakD,peakU)>=95e6)wan='≥ Gigabit proven (peak '+bps(Math.max(peakD,peakU))+')';else if(n>5)wan='Peak seen '+bps(Math.max(peakD,peakU))+' (not enough to tell 100M/1G)';
+  var of=D.optical&&D.optical.found?D.optical.fields:{},uni=of.uni_speed?of.uni_speed.value+' Mbps (ONU LAN port)':null;
+  $('lk').innerHTML=kv([['Download now',bps(d)],['Upload now',bps(u)],['Peak ↓ / ↑',bps(peakD)+' / '+bps(peakU)],['Average ↓ / ↑',n?bps(sumD/n)+' / '+bps(sumU/n):'-'],['WAN port speed',uni||wan||'measuring…'],['Session uptime',s.uptime]]);
+  $('st').innerHTML=kv([['Downloaded (this session)',bytes(s.down_bytes)],['Uploaded (this session)',bytes(s.up_bytes)],['IP address',s.ip],['Router',s.router]])}
+ function poll(){if(!alive)return;fetch('/admin/api/live?uid='+encodeURIComponent(uid)).then(function(r){return r.json()}).then(function(s){
+   if(!s.found){if($('lk')&&!self.dcWait)$('lk').innerHTML='<div class="hint h-warn" style="--i:0">User is not online right now.</div>';prev=null;return}
+   if(self.dcWait){self.dcWait=false;$('dcs').innerHTML='<div class="hint h-ok" style="--i:0">✅ Reconnected after '+Math.round((Date.now()-self.dcT)/1000)+' s. New session started.</div>';dl=[];ul=[];peakD=peakU=sumD=sumU=n=0;prev=null}
+   if(prev&&s.ts>prev.ts&&s.down_bytes>=prev.down_bytes){var dt=s.ts-prev.ts,d=(s.down_bytes-prev.down_bytes)*8/dt,u=(s.up_bytes-prev.up_bytes)*8/dt;dl.push(d);ul.push(u);if(dl.length>N){dl.shift();ul.shift()}peakD=Math.max(peakD,d);peakU=Math.max(peakU,u);sumD+=d;sumU+=u;n++;draw();show(s,d,u)}
+   else{show(s,null,null);if(prev&&s.down_bytes<prev.down_bytes){dl=[];ul=[]}}prev=s}).catch(function(){})}
+ self.disconnect=function(){if(!confirm('Disconnect this PPPoE session? The customer router will redial and reconnect automatically.'))return;var b=$('dc');b.disabled=true;
+  var f=new FormData();f.append('uid',uid);fetch('/admin/api/disconnect',{method:'POST',body:f}).then(function(r){return r.json()}).then(function(r){b.disabled=false;
+   if(r.ok){self.dcWait=true;self.dcT=Date.now();$('dcs').innerHTML='<div class="hint h-info" style="--i:0"><span class="spin"></span>&nbsp; Session removed on '+esc(r.router)+'. Waiting for the router to reconnect…</div>'}
+   else $('dcs').innerHTML='<div class="hint h-err" style="--i:0">'+esc(r.error||'Failed')+'</div>'})};
+ self.start=function(){self.mount();poll();timer=setInterval(poll,2000)};
+ window.addEventListener('resize',self.resize)}
+
+/* ---------------- ping */
+function pingUI(host){
+ host.innerHTML='<button class="sm" id="pb">▶ Run ping (20 packets, 100 ms)</button><div id="pr" style="margin-top:12px"></div>';
+ function paint(p){if(!p.ok){$('pr').innerHTML='<div class="hint h-warn" style="--i:0">'+esc(p.error)+'</div>';return}
+  var mx=Math.max.apply(null,p.times.filter(function(x){return x!=null}).concat([1])),bars=p.times.map(function(t){return t==null?'<div title="lost" style="flex:1;height:100%;display:flex;align-items:flex-end"><div style="width:100%;height:100%;background:#fecaca;border-radius:3px"></div></div>':'<div title="'+t+' ms" style="flex:1;height:100%;display:flex;align-items:flex-end"><div style="width:100%;height:'+Math.max(6,t/mx*100)+'%;background:'+(t>20?'#d97706':'#2563eb')+';border-radius:3px 3px 0 0;animation:bar .6s both"></div></div>'}).join('');
+  $('pr').innerHTML=kv([['Target',p.ip],['Sent / received',p.sent+' / '+p.received],['Packet loss',p.loss+' %'],['Min / avg / max',[p.min,p.avg,p.max].join(' / ')+' ms'],['Jitter',p.jitter==null?'-':p.jitter+' ms']])+
+   '<div style="display:flex;gap:3px;height:80px;margin-top:12px;align-items:flex-end">'+bars+'</div><div class="mu" style="font-size:12px;margin-top:4px">Each bar = one packet (red = lost). From the router to the customer router, interval '+esc(p.interval)+'.</div>'}
+ $('pb').onclick=function(){var b=this;b.disabled=true;$('pr').innerHTML='<span class="spin"></span> pinging…';fetch('/admin/api/ping?uid='+encodeURIComponent(uid)).then(function(r){return r.json()}).then(function(p){b.disabled=false;paint(p)}).catch(function(){b.disabled=false})};
+ if(D.ping)paint(D.ping)}
+
+/* ---------------- render */
+function render(d){D=d;clearInterval(iv);$('loader').remove();$('out').style.display='block';
+ var m=d.mikrotik,v=d.verdict,o=d.optical,hero=v.errors?'bad':(v.warnings?'warn':'good');
+ $('hero').innerHTML='<div class="hero '+hero+'"><div style="font-size:30px">'+(hero==='good'?'✅':(hero==='bad'?'🚨':'⚠️'))+'</div><div><div class="big">'+esc(v.text.replace(/^[^\w]+\s*/,''))+'</div><small>'+esc(d.name||d.uid||d.mac||'')+(m.found&&m.state?' · PPPoE '+m.state:'')+'</small></div></div>';
+ /* overview */
+ var h='';d.hints.forEach(function(x,i){h+='<div class="hint h-'+x.level+'" style="--i:'+i+'">'+({err:'🚨',warn:'⚠️',ok:'✅',info:'ℹ️'}[x.level])+' '+esc(x.text)+'</div>'});
+ var ov=card('Findings',h||'<span class="mu">No findings.</span>');
+ if(m.found){var q=m.queue||{},i=m.iface||{},s=m.session||{},pool=m.profile_pool,pl=pool&&m.pool_by_ip&&pool!==m.pool_by_ip?pool+' (IP is in pool '+m.pool_by_ip+')':(pool||m.pool_by_ip);
+  ov+=card('Session',(m.radius?'<div class="mu" style="margin-bottom:8px">Authenticated via RADIUS (no local PPP secret)</div>':'')+'<div style="margin-bottom:10px">'+badge(m.state,m.state.toUpperCase())+' <span class="mu">on '+esc(m.router)+'</span></div>'+
+   kv([['Customer',d.name],['Phone',d.phone],['IP address',m.ip],['Uptime',m.uptime],['PPP profile',m.profile],['Rate limit',m.rate_limit],['IP pool',pl],['Local address',m.profile_local],['Parent queue',m.parent_queue],['Queue max-limit',q.max_limit],['Service',m.service],
+       ['Downloaded this session',s.down_bytes!=null?bytes(s.down_bytes):null],['Uploaded this session',s.up_bytes!=null?bytes(s.up_bytes):null],['Queue drops (up/down)',q.dropped],['Interface errors rx/tx',i.rx_error!=null?(i.rx_error+' / '+i.tx_error):null],['Link downs',i.link_downs],
+       ['Last logged out',m.last_logged_out],['Last disconnect reason',m.last_disconnect_reason],['Comment',m.comment]])+
+   (m.lists&&m.lists.length?'<div style="margin-top:10px">Address lists: '+m.lists.map(function(l){return '<span class="chip">'+esc(l)+'</span>'}).join('')+'</div>':''));
+  if(m.logs&&m.logs.length)ov+=card('Recent PPPoE log',m.logs.map(function(l){return '<div><span class="mu">'+esc(l.time)+'</span> '+esc(l.message)+'</div>'}).join(''))}
+ else ov+=card('Session','<span class="mu">User not found.</span>'+(m.errors&&m.errors.length?'<div class="hint h-warn" style="--i:0">'+m.errors.map(esc).join('<br>')+'</div>':''));
+ if(d.snmp&&!d.snmp.ok)ov+=card('Router SNMP','<div class="hint h-warn" style="--i:0">'+esc(d.snmp.error)+'</div>');
+ $('p-ov').innerHTML=ov;
+ /* live */
+ if(m.found&&m.state==='online'&&!m.snmp_only){live=new Live();live.start()}else $('p-live').innerHTML=card('Live traffic','<span class="mu">Available while the user is online (API access required).</span>');
+ /* L2 */
+ var l2=d.l2||{},mk=l2.mikrotik||{},fl='';
+ var chain='<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:stretch">'+node('📟',(d.device&&(d.device.short||d.device.vendor))||'Customer router',esc(d.mac||'MAC unknown'))+arrow()+
+  node('🔌',o&&o.found?('ONU '+(o.onu||'?')):'ONU',o&&o.found?esc((o.fields.mac&&o.fields.mac.value)||o.ifname||''):'not located',o&&o.found?'':'warn')+arrow()+
+  node('🛰',o&&o.found?o.olt:'OLT',o&&o.found?('PON '+esc(o.pon||'?')+(o.link?' · link '+esc(o.link):'')):'not located',o&&o.found?'':'warn')+arrow()+
+  node('🏷','VLAN',l2.vlan?esc(l2.vlan):'unknown')+arrow()+
+  node('🔀',(mk.vlan_ifaces&&mk.vlan_ifaces[0])?mk.vlan_ifaces[0].name:'Router interface',(mk.vlan_ifaces&&mk.vlan_ifaces[0])?('on '+esc(mk.vlan_ifaces[0].parent||'?')):(mk.router?'VLAN interface not matched':''))+arrow()+
+  node('🖧',m.found?m.router:'MikroTik',m.found?(esc(m.profile||'')+(m.profile_pool||m.pool_by_ip?' · pool '+esc(m.profile_pool||m.pool_by_ip):'')):'')+'</div>';
+ fl=card('Connection path',chain+'<div class="mu" style="font-size:12.5px;margin-top:8px">VLAN comes from the OLT MAC table (FDB id). The router-side interface is matched by VLAN id on /interface vlan.</div>');
+ if(mk.error)fl+=card('MikroTik L2','<div class="hint h-warn" style="--i:0">'+esc(mk.error)+'</div>');
+ else if(mk.router){fl+=card('MikroTik side',kv([['VLAN interface(s)',(mk.vlan_ifaces||[]).map(function(x){return x.name+' (vlan '+x.vid+' on '+x.parent+')'}).join(', ')||'none matched'],
+   ['PPPoE server(s)'+(mk.servers_matched?' on this VLAN':' (all)'),(mk.servers||[]).map(function(x){return (x.service||'-')+' @ '+x.interface+(x.disabled?' [disabled]':'')}).join(', ')],
+   ['Bridge host entry',(mk.bridge_host||[]).map(function(x){return x.interface+(x.vid?' vid '+x.vid:'')}).join(', ')||'none (PPPoE bound directly to the VLAN interface)']]))}
+ if(o&&o.found){var f=o.fields||{},fv=function(k){return f[k]?f[k].value:null},low=function(k){return f[k]&&f[k].conf==='low'};
+  var st=f.status?badge(f.status.online?'online':'offline',f.status.value):(o.link?badge(o.link==='up'?'online':'offline','Link '+o.link):'');
+  var body='<div style="margin-bottom:10px">'+st+' <span class="mu">'+esc(o.olt)+' · '+esc(o.vendor||'')+' · '+esc(o.host||'')+'</span></div>'+
+   kv([['OLT',o.olt],['PON port',o.pon],['ONU ID',o.onu],['Interface',o.ifname],['VLAN',o.vlan],['Description',o.alias||fv('name')],['ONU MAC',fv('mac')],['ONU brand (from MAC)',o.onu_brand],['ONU vendor',fv('vendor')],['ONU model',fv('model')],
+       ['Distance',fv('distance')!=null?fv('distance')+' m'+(low('distance')?' ⚠':''):null],['Temperature',fv('temp')!=null?fv('temp')+' °C'+(low('temp')?' ⚠':''):null],['Voltage',fv('voltage')!=null?fv('voltage')+' V'+(low('voltage')?' ⚠':''):null],
+       ['LAN port speed',fv('uni_speed')!=null?fv('uni_speed')+' Mbps':null],['LAN port status',fv('uni_status')],['Online time',fv('uptime')]])+
+   '<div style="margin-top:12px">'+gauge(fv('rx'),'ONU Rx (from OLT)',f.rx&&f.rx.quality,low('rx'))+gauge(fv('tx'),'ONU Tx',null,low('tx'))+gauge(fv('olt_rx'),'OLT Rx (from ONU)',f.olt_rx&&f.olt_rx.quality,low('olt_rx'))+'</div>';
+  if(!o.configured)body+='<div class="hint h-info" style="--i:0">No optical OIDs set for profile “'+esc(o.profile)+'”. Open Devices → OLT → Tools → Discover.</div>';
+  if(o.raw&&o.raw.length)body+='<details style="margin-top:8px"><summary>Raw SNMP values</summary><table><tbody>'+o.raw.map(function(r){return '<tr><td>'+esc(r.field)+(r.conf==='low'?' ⚠':'')+'</td><td><code>'+esc(r.oid)+'</code></td><td>'+esc(r.raw)+'</td></tr>'}).join('')+'</tbody></table></details>';
+  fl+=card('OLT · ONU',body)}
+ else if(o){fl+=card('OLT · ONU','<span class="mu">ONU not found on '+o.searched+' OLT(s) by MAC '+esc(d.mac||'')+'.</span>')}
+ else fl+=card('OLT · ONU','<span class="mu">'+(d.olts_configured?'No MAC available to search (user offline and no last-known MAC).':'No OLT added yet. Add OLTs in Devices.')+'</span>');
+ if(l2.checked&&l2.checked.length)fl+=card('OLTs checked','<table><tbody>'+l2.checked.map(function(c){return '<tr><td><b>'+esc(c.olt)+'</b><div class="mu" style="font-size:12px">'+esc(c.host||'')+'</div></td><td>'+(c.state==='found'?badge('up','customer found here'):(c.state==='error'?badge('down','error'):badge('unknown','not on this OLT')))+'</td><td class="mu">'+esc(c.detail)+'</td></tr>'}).join('')+'</tbody></table>');
+ $('p-l2').innerHTML=fl;
+ /* router */
+ var dv=d.device,wan='';
+ var of2=o&&o.found?o.fields:{};
+ $('p-rt').innerHTML=card('Customer router',dv?kv([['Brand',dv.short||dv.vendor||'Unknown (update OUI database in Settings)'],['Manufacturer',dv.vendor],['MAC address',dv.mac],['MAC type',dv.local?'Locally administered (random)':'Universal (real)'],['MAC source',m.mac_source],
+    ['WAN IP (PPPoE)',m.ip],['WAN port speed',of2.uni_speed?of2.uni_speed.value+' Mbps (ONU LAN port)':'see Live session (inferred from peak throughput)'],['Link to ONU',of2.uni_status?of2.uni_status.value:null]]):'<span class="mu">MAC not available.</span>')+
+   card('Ping customer router · 20 packets × 100 ms','<div id="pingbox"></div>');
+ pingUI($('pingbox'));
+ /* report & reply */
+ var rep=(d.report||[]).join('\n'),tix=d.tickets||[],lang='bn';
+ $('p-rp').innerHTML=card('Technical report (for the support team)','<pre id="rep" style="white-space:pre-wrap;font:13px/1.55 ui-monospace,Consolas,monospace;background:#f7f9fd;border:1px solid #e4e9f2;border-radius:10px;padding:12px;margin:0 0 10px"></pre><div class="row"><button class="sm sec" id="cprep">📋 Copy</button><button class="sm" id="tgrep">✈️ Send to Telegram</button><span id="tgs" class="mu"></span></div>')+
+  card('Reply to customer','<div class="row" style="margin-bottom:8px"><button class="sm" id="lbn">বাংলা</button><button class="sm sec" id="len">English</button><span class="mu" style="font-size:12.5px">Auto-written from the findings; edit if needed, then confirm.</span></div><textarea id="rtxt" rows="9"></textarea>'+
+   '<div class="row" style="margin-top:6px"><label>Send as reply to ticket</label><select id="tk" style="width:auto;min-width:200px">'+(tix.length?tix.map(function(t){return '<option value="'+t.id+'">#'+t.id+' · '+esc(t.category)+' ('+esc(t.status)+')</option>'}).join(''):'<option value="">No open ticket for this user</option>')+'</select>'+
+   '<button class="ok sm" id="sndr" '+(tix.length?'':'disabled')+'>✅ Confirm &amp; send to customer</button><button class="sm sec" id="cprp">📋 Copy</button></div>');
+ $('rep').textContent=rep;$('rtxt').value=d.reply_bn;
+ function setLang(l){lang=l;$('rtxt').value=l==='bn'?d.reply_bn:d.reply_en;$('lbn').className='sm'+(l==='bn'?'':' sec');$('len').className='sm'+(l==='en'?'':' sec')}
+ $('lbn').onclick=function(){setLang('bn')};$('len').onclick=function(){setLang('en')};
+ function cp(t,b){(navigator.clipboard?navigator.clipboard.writeText(t):Promise.reject()).then(function(){var o=b.textContent;b.textContent='✅ Copied';setTimeout(function(){b.textContent=o},1500)}).catch(function(){window.prompt('Copy:',t)})}
+ $('cprep').onclick=function(){cp(rep,this)};$('cprp').onclick=function(){cp($('rtxt').value,this)};
+ $('tgrep').onclick=function(){var b=this;b.disabled=true;var f=new FormData();f.append('uid',uid);if(tix.length)f.append('cid',tix[0].id);fetch('/admin/diag/telegram',{method:'POST',body:f}).then(function(r){return r.json()}).then(function(r){b.disabled=false;$('tgs').textContent=r.ok?'Sent ✅':('Failed: '+r.error)})};
+ $('sndr').onclick=function(){var t=$('rtxt').value.trim(),c=$('tk').value;if(!t||!c)return;if(!confirm('Send this reply to the customer on ticket #'+c+'?'))return;
+  var f=document.createElement('form');f.method='post';f.action='/admin/complaints/'+c+'/act';[['action','reply'],['message',t]].forEach(function(p){var i=document.createElement('input');i.type='hidden';i.name=p[0];i.value=p[1];f.appendChild(i)});document.body.appendChild(f);f.submit()};
+}
+var url='/admin/api/diag?uid='+encodeURIComponent(uid)+'&mac='+encodeURIComponent(mac);
+fetch(url).then(function(r){if(r.redirected||!r.ok)throw new Error('Request failed ('+r.status+')');return r.json()}).then(render).catch(function(e){clearInterval(iv);$('loader').innerHTML='<div class="hint h-err" style="--i:0">'+esc(e.message)+'</div>'});
+})();
+</script>
+{% endraw %}
+{% endblock %}
